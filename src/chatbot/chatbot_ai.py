@@ -7,11 +7,13 @@ from src.chatbot.internal_schemas import (
     FoodOrderStateVerification,
     IntentAnalysis,
     OrderFinalizationIntent,
+    OrderSupervisionResult,
     StateVerification,
 )
 from src.chatbot.prompts import (
     ANALYZE_FOOD_ORDER_INTENT_SYSTEM_PROMPT,
     ANALYZE_INTENT_SYSTEM_PROMPT,
+    SUPERVISE_ORDER_STATE_SYSTEM_PROMPT,
     CLARIFY_VAGUE_MESSAGE_SYSTEM_PROMPT,
     EXTRACT_ADD_ITEMS_SYSTEM_PROMPT,
     EXTRACT_MODIFY_ITEMS_SYSTEM_PROMPT,
@@ -40,11 +42,17 @@ class ChatbotAI:
         latest_message: str,
         message_history: list[Message] | None = None,
         previous_state: str | None = None,
+        has_pending_clarification: bool = False,
     ) -> IntentAnalysis:
-        history = [m.model_dump() for m in (message_history or [])[-6:]]
+        history = [m.model_dump() for m in (message_history or [])[-10:]]
         messages: list[dict] = [{"role": "system", "content": ANALYZE_INTENT_SYSTEM_PROMPT}]
         if previous_state:
             messages.append({"role": "system", "content": f"Previous conversation state: {previous_state}"})
+        if has_pending_clarification:
+            messages.append({
+                "role": "system",
+                "content": "Context: the bot just asked the customer a clarification question (e.g. 'did you mean X or Y?'). Their reply is likely a food_order response — lean towards food_order unless the message clearly indicates something else.",
+            })
         messages.extend(history)
         messages.append({"role": "user", "content": latest_message})
 
@@ -73,7 +81,7 @@ class ChatbotAI:
         transition_valid: bool = True,
         analysis_reasoning: str = "",
     ) -> StateVerification:
-        history = [m.model_dump() for m in (message_history or [])[-6:]]
+        history = [m.model_dump() for m in (message_history or [])[-10:]]
         context_lines = [
             f"Proposed state: {proposed_state}",
             f"Previous state: {previous_state}",
@@ -516,6 +524,41 @@ class ChatbotAI:
             return OrderFinalizationIntent(**json.loads(response.choices[0].message.content))
         except Exception as e:
             raise AIServiceError(f"Failed to parse order finalization intent: {e}") from e
+
+    async def supervise_order_state(
+        self,
+        proposed_order_state: dict,
+        latest_message: str,
+        message_history: list[Message] | None = None,
+        has_pending_clarification: bool = False,
+    ) -> OrderSupervisionResult:
+        history = [m.model_dump() for m in (message_history or [])]
+        context_lines = [
+            f"Proposed order state: {proposed_order_state}",
+            f"Has pending clarification: {has_pending_clarification}",
+        ]
+        messages: list[dict] = [
+            {"role": "system", "content": SUPERVISE_ORDER_STATE_SYSTEM_PROMPT},
+            {"role": "system", "content": "\n".join(context_lines)},
+            *history,
+            {"role": "user", "content": latest_message},
+        ]
+
+        try:
+            response = await _client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                max_tokens=300,
+                temperature=0,
+                response_format={"type": "json_object"},
+            )
+        except OpenAIError as e:
+            raise AIServiceError(f"OpenAI request failed: {e}") from e
+
+        try:
+            return OrderSupervisionResult(**json.loads(response.choices[0].message.content))
+        except Exception as e:
+            raise AIServiceError(f"Failed to parse order supervision result: {e}") from e
 
     async def answer_restaurant_question(
         self,

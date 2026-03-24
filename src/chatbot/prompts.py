@@ -29,7 +29,7 @@ The customer's order has just been updated. Based on the conversation history an
 
 ## Rules
 
-1. Always state the full current order in plain text (e.g. "So you've got: 2x Classic Beef Burger (no onions), 1x Coke.").
+1. State the full current order in plain text. Vary your opening phrase naturally — for example: "So you've got:", "Here's your order so far:", "Got it! Your order is:", "Updated — you've now got:", "Perfect, here's what I have:". Do not use the same phrase every time.
 2. If the order has items, always end with "Is that all?" — no exceptions.
 3. If the order is empty (cancelled or cleared), confirm the cancellation warmly and ask if they'd like to start a new order. Do NOT end with "Is that all?".
 4. Use plain text only — no markdown, no asterisks, no bullet points.
@@ -155,10 +155,11 @@ Your job is to extract every food or drink item the customer has mentioned order
    - modifier: any customisation the customer specified (e.g. "no onions", "extra spicy", "large", "with oat milk"). null if none.
 3. If the same item is mentioned multiple times with no modifier differences, consolidate into one entry with the correct total quantity.
 4. If the customer orders N of an item and then describes each one with a different modifier (e.g. "two burgers, one gluten free and the other with avocado"), produce N separate entries (one per modifier) each with quantity 1 — do NOT also produce an unmodified entry for the total count.
-5. If the customer corrects or revises an item within the same message using words like "actually", "wait", "no", "scratch that", "make that", or "instead", treat only the final corrected version as the order. Do not produce a separate entry for the original description that was corrected away.
-6. Two items with the same name but different modifiers are separate line items — do not merge them.
-7. Do not infer or add items the customer did not mention.
-8. Do not include items the customer said they do NOT want.
+5. Natural quantity phrases: treat "another X" as quantity 1 (additional), "a couple of X" as quantity 2, "a few X" as quantity 3, "make it two" or "double it" (referring to the last item mentioned) as quantity 2. When referring back to a previous item implicitly (e.g. "make it two"), identify the item from conversation context.
+6. If the customer corrects or revises an item within the same message using words like "actually", "wait", "no", "scratch that", "make that", or "instead", treat only the final corrected version as the order. Do not produce a separate entry for the original description that was corrected away.
+7. Two items with the same name but different modifiers are separate line items — do not merge them.
+8. Do not infer or add items the customer did not mention.
+9. Do not include items the customer said they do NOT want.
 
 ## Output format
 
@@ -288,7 +289,7 @@ The customer already has an active order shown below. Your job is to extract onl
 
 ## Rules
 
-1. Read the full conversation to understand context, but only extract items the customer is asking to ADD that are not already in the current order above.
+1. Extract items from the latest message only. Use the conversation history as context to understand intent, but do not re-extract an item that appears in the history if it is already present in the current order or was not just now requested. Do not count an item from the history as an additional quantity if it also appears in the latest message.
 2. If the customer is increasing the quantity of an existing item, extract it with the additional quantity only (e.g. if they have 2x burger and ask for 1 more, return quantity 1).
 3. Each item must have:
    - name: the item name as the customer said it
@@ -326,6 +327,32 @@ Return a JSON object with a single key "items" containing an array of order item
 
 {"items": [{"name": "pepperoni pizza", "quantity": 1, "modifier": null}]}"""
 
+SUPERVISE_ORDER_STATE_SYSTEM_PROMPT = """You are an order accuracy auditor for a restaurant chatbot.
+
+Another system has produced a proposed order state based on the customer's latest message. Your job is to verify whether the proposed order state accurately reflects everything the customer has agreed to in this conversation.
+
+## Your task
+
+Read through the entire conversation. Identify every food or drink item the customer has ordered, added, modified, or removed. Then compare this to the proposed order state.
+
+## Rules
+
+1. Only flag discrepancies you are confident about. When in doubt, mark the order as correct (is_correct: true).
+2. If has_pending_clarification is true, there may be one or more unresolved items legitimately absent from the proposed state — do NOT treat their absence as an error.
+3. If the order was completely cancelled, the correct state is an empty items array. An empty proposed state is correct in that case.
+4. Items the customer explicitly removed must NOT appear in the corrected order.
+5. Quantities must match what the customer stated. Wrong quantity is a discrepancy.
+6. Modifiers must match. Missing or wrong modifier is a discrepancy.
+7. Do not add items the customer never ordered.
+8. If correcting, produce the complete corrected items list (not just the delta).
+9. Use item names exactly as they appear in the proposed order state — do not rename.
+10. If the proposed state is correct, set is_correct: true and corrected_items: null.
+
+## Output
+
+Return JSON with this exact structure:
+{"is_correct": true|false, "corrected_items": [{"name": "...", "quantity": N, "modifier": "..."|null}]|null, "reasoning": "<one to two sentences>"}"""
+
 ANALYZE_INTENT_SYSTEM_PROMPT = """You are a conversation state classifier for a restaurant chatbot.
 
 Your job is to classify the user's latest message into exactly one state and report your confidence.
@@ -351,12 +378,21 @@ Use the message history only as supporting context — your classification must 
 4. Match on intent, not just keywords. "Is the burger good?" is menu_question, not vague_message.
 5. If a message could belong to multiple states, choose the most dominant intent and put the secondary one in "alternative".
 6. Short or one-word messages with no discernible meaning should be vague_message.
+7. If the previous context shows a pending clarification (the bot recently asked "did you mean X or Y?"), treat short responses like "the first one", "that one", "yes", "the second" as food_order with high confidence — they are answering the bot's question.
+8. When a message combines a greeting with a clear intent (e.g. "hey can I get a burger", "hi what time do you close"), classify by the non-greeting intent, not greeting.
 
 ## Confidence guide
 
 - high   — The intent is clear and unambiguous.
 - medium — The intent is likely but context-dependent or the message is short.
 - low    — The intent could plausibly be two or more different states.
+
+## Examples
+
+"hey I want a burger" → food_order (greeting ignored, order is dominant)
+"what's in the chicken sandwich? I'll have one" → food_order (question is secondary to ordering intent)
+"the first one" (when bot just asked "did you mean X or Y?") → food_order
+"good morning, are you open on Sundays?" → restaurant_question
 
 ## Output format
 

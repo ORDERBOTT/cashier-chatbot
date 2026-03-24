@@ -138,11 +138,13 @@ class StateResolver:
         latest_message: str,
         message_history: list[Message] | None,
         previous_state: ConversationState | None,
+        has_pending_clarification: bool = False,
     ) -> ConversationState:
         analysis = await self._ai.analyze_intent(
             latest_message=latest_message,
             message_history=message_history,
             previous_state=previous_state.value if previous_state else None,
+            has_pending_clarification=has_pending_clarification,
         )
 
         proposed = _parse_conversation_state(analysis.state)

@@ -1,7 +1,8 @@
+import asyncio
 from dataclasses import dataclass, field
 from typing import Literal
 
-from rapidfuzz import fuzz, process
+from rapidfuzz import fuzz, process, utils
 
 from src.cache import cache_get
 from src.chatbot.chatbot_ai import ChatbotAI
@@ -27,6 +28,15 @@ NOT_FOUND_THRESHOLD = 50     # top match below this → item does not exist on m
 AMBIGUITY_GAP = 6            # top N matches within this score range of each other → ambiguous
 
 
+def _combined_scorer(s1: str, s2: str, **kwargs: object) -> float:
+    s1p = utils.default_process(s1)
+    s2p = utils.default_process(s2)
+    return max(
+        fuzz.WRatio(s1p, s2p, processor=None),
+        fuzz.token_set_ratio(s1p, s2p, processor=None),
+    )
+
+
 @dataclass
 class _MatchResult:
     item: OrderItem
@@ -48,7 +58,7 @@ class FoodOrderHandlerFactory:
         }
 
     async def handle(self, request: BotMessageRequest) -> BotMessageResponse:
-        if not request.order_state:
+        if not request.order_state or not request.order_state.get("items"):
             response = await self._handle_new_order(request)
             response.previous_food_order_state = FoodOrderState.NEW_ORDER.value
             return response
@@ -84,11 +94,13 @@ class FoodOrderHandlerFactory:
         return self._build_response(results, request)
 
     async def _extract_and_match(self, request: BotMessageRequest) -> list[_MatchResult]:
-        items = await self._ai.extract_order_items(
-            latest_message=request.latest_message,
-            message_history=request.message_history,
+        items, menu_names = await asyncio.gather(
+            self._ai.extract_order_items(
+                latest_message=request.latest_message,
+                message_history=request.message_history,
+            ),
+            self._fetch_menu_names(request.user_id),
         )
-        menu_names = await self._fetch_menu_names(request.user_id)
         return [self._match_item(item, menu_names) for item in items]
 
     # ── Fuzzy matching ────────────────────────────────────────────────────────
@@ -111,7 +123,7 @@ class FoodOrderHandlerFactory:
         top_matches = process.extract(
             item.name,
             menu_names,
-            scorer=fuzz.WRatio,
+            scorer=_combined_scorer,
             limit=5,
         )  # [(name, score, index), ...]
 
@@ -269,12 +281,14 @@ class FoodOrderHandlerFactory:
         )
 
     async def _extract_and_match_add(self, request: BotMessageRequest) -> list[_MatchResult]:
-        items = await self._ai.extract_add_items(
-            latest_message=request.latest_message,
-            order_state=request.order_state or {},
-            message_history=request.message_history,
+        items, menu_names = await asyncio.gather(
+            self._ai.extract_add_items(
+                latest_message=request.latest_message,
+                order_state=request.order_state or {},
+                message_history=request.message_history,
+            ),
+            self._fetch_menu_names(request.user_id),
         )
-        menu_names = await self._fetch_menu_names(request.user_id)
         return [self._match_item(item, menu_names) for item in items]
 
     async def _handle_add_to_order(self, request: BotMessageRequest) -> BotMessageResponse:
@@ -307,12 +321,14 @@ class FoodOrderHandlerFactory:
         return order_state, f'"{canonical_name}" not found in your order.'
 
     async def _handle_modify_order(self, request: BotMessageRequest) -> BotMessageResponse:
-        modifications = await self._ai.extract_modify_items(
-            latest_message=request.latest_message,
-            order_state=request.order_state or {},
-            message_history=request.message_history,
+        modifications, menu_names = await asyncio.gather(
+            self._ai.extract_modify_items(
+                latest_message=request.latest_message,
+                order_state=request.order_state or {},
+                message_history=request.message_history,
+            ),
+            self._fetch_menu_names(request.user_id),
         )
-        menu_names = await self._fetch_menu_names(request.user_id)
 
         # Match each ModifyItem name against the menu using existing _match_item
         match_results = [
@@ -346,11 +362,13 @@ class FoodOrderHandlerFactory:
         )
 
     async def _resolve_and_match_remove(self, request: BotMessageRequest) -> list[_MatchResult]:
-        items = await self._ai.resolve_remove_item(
-            latest_message=request.latest_message,
-            message_history=request.message_history,
+        items, menu_names = await asyncio.gather(
+            self._ai.resolve_remove_item(
+                latest_message=request.latest_message,
+                message_history=request.message_history,
+            ),
+            self._fetch_menu_names(request.user_id),
         )
-        menu_names = await self._fetch_menu_names(request.user_id)
         return [self._match_item(item, menu_names) for item in items]
 
     async def _handle_remove_from_order(self, request: BotMessageRequest) -> BotMessageResponse:
@@ -358,11 +376,13 @@ class FoodOrderHandlerFactory:
         return self._build_remove_response(results, request)
 
     async def _handle_swap_item(self, request: BotMessageRequest) -> BotMessageResponse:
-        swap = await self._ai.extract_swap_items(
-            latest_message=request.latest_message,
-            message_history=request.message_history,
+        swap, menu_names = await asyncio.gather(
+            self._ai.extract_swap_items(
+                latest_message=request.latest_message,
+                message_history=request.message_history,
+            ),
+            self._fetch_menu_names(request.user_id),
         )
-        menu_names = await self._fetch_menu_names(request.user_id)
 
         remove_results = [self._match_item(item, menu_names) for item in swap.remove]
         add_results = [self._match_item(item, menu_names) for item in swap.add]

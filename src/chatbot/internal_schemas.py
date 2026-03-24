@@ -29,3 +29,9 @@ class FoodOrderStateVerification(BaseModel):
 
 class OrderFinalizationIntent(BaseModel):
     intent: Literal["confirm", "modify", "unclear"]
+
+
+class OrderSupervisionResult(BaseModel):
+    is_correct: bool
+    corrected_items: list[dict] | None = None
+    reasoning: str

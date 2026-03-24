@@ -51,6 +51,7 @@ class ChatReplyService:
             latest_message=request.latest_message,
             message_history=request.message_history,
             previous_state=previous_state,
+            has_pending_clarification=request.has_pending_clarification,
         )
         response = await self.handler_factory.handle(state, request)
         if response.awaiting_order_confirmation:

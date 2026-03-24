@@ -94,14 +94,28 @@ class StateHandlerFactory:
     async def _handle_food_order(self, request: BotMessageRequest) -> BotMessageResponse:
         response = await self._food_order_factory.handle(request)
         if not response.has_pending_clarification:
+            has_items = bool((response.order_state or {}).get("items"))
+
+            if has_items:
+                try:
+                    supervision = await self._ai.supervise_order_state(
+                        proposed_order_state=response.order_state or {},
+                        latest_message=request.latest_message,
+                        message_history=request.message_history,
+                        has_pending_clarification=response.has_pending_clarification,
+                    )
+                    if not supervision.is_correct and supervision.corrected_items is not None:
+                        response.order_state = {"items": supervision.corrected_items}
+                except Exception:
+                    pass  # supervision failure is non-fatal; pass through unchanged
+
             polished = await self._ai.polish_food_order_reply(
                 order_state=response.order_state or {},
                 latest_message=request.latest_message,
                 message_history=request.message_history,
             )
             response.chatbot_message = polished
-            has_items = bool((response.order_state or {}).get("items"))
-            response.awaiting_order_confirmation = has_items
+            response.awaiting_order_confirmation = bool((response.order_state or {}).get("items"))
         return response
 
     async def _handle_pickup_ping(self, request: BotMessageRequest) -> BotMessageResponse:
