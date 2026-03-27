@@ -1,3 +1,5 @@
+import json
+
 from src.cache import cache_get
 from src.chatbot.chatbot_ai import ChatbotAI
 from src.chatbot.constants import ConversationState
@@ -13,6 +15,81 @@ MENU_CONTEXT_FALLBACK = "No menu information is available at this time."
 
 RESTAURANT_NAME_LOCATION_KEY = "restaurant_name_location:{user_id}"
 RESTAURANT_NAME_LOCATION_FALLBACK = "No restaurant name or location is available at this time."
+RESTAURANT_CONTEXT_JSON_KEY = "restaurantContext:{user_id}"
+RESTAURANT_NAME_KEY = "restaurant_name:{user_id}"
+RESTAURANT_CITY_KEY = "restaurant_city:{user_id}"
+RESTAURANT_PHONE_KEY = "restaurant_phone:{user_id}"
+RESTAURANT_TAGLINE_KEY = "restaurant_tagline:{user_id}"
+RESTAURANT_GREETING_KEY = "restaurant_greeting:{user_id}"
+
+
+async def _get_restaurant_profile_fields(user_id: str) -> dict[str, str]:
+    name = await cache_get(RESTAURANT_NAME_KEY.format(user_id=user_id))
+    city = await cache_get(RESTAURANT_CITY_KEY.format(user_id=user_id))
+    phone = await cache_get(RESTAURANT_PHONE_KEY.format(user_id=user_id))
+    tagline = await cache_get(RESTAURANT_TAGLINE_KEY.format(user_id=user_id))
+    greeting = await cache_get(RESTAURANT_GREETING_KEY.format(user_id=user_id))
+    return {
+        "restaurantName": name or "",
+        "city": city or "",
+        "phone": phone or "",
+        "tagline": tagline or "",
+        "greeting": greeting or "",
+    }
+
+
+async def _get_restaurant_profile_json(user_id: str) -> dict[str, str]:
+    raw = await cache_get(RESTAURANT_CONTEXT_JSON_KEY.format(user_id=user_id))
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(parsed, dict):
+        return {k: str(v) for k, v in parsed.items() if v is not None}
+    return {}
+
+
+def _build_name_location(profile: dict[str, str]) -> str | None:
+    name_location = profile.get("nameLocation")
+    if name_location:
+        return name_location
+
+    name = profile.get("restaurantName", "").strip()
+    city = profile.get("city", "").strip()
+    if name and city:
+        return f"{name}, {city}"
+    if name:
+        return name
+    return None
+
+
+def _build_restaurant_context(profile: dict[str, str]) -> str | None:
+    lines: list[str] = []
+    name = profile.get("restaurantName", "").strip()
+    tagline = profile.get("tagline", "").strip()
+    phone = profile.get("phone", "").strip()
+    city = profile.get("city", "").strip()
+    greeting = profile.get("greeting", "").strip()
+    name_location = _build_name_location(profile)
+
+    if name:
+        lines.append(f"Restaurant name: {name}")
+    if name_location:
+        lines.append(f"Location: {name_location}")
+    if city:
+        lines.append(f"City: {city}")
+    if phone:
+        lines.append(f"Phone: {phone}")
+    if tagline:
+        lines.append(f"Tagline: {tagline}")
+    if greeting:
+        lines.append(f"Greeting: {greeting}")
+
+    if lines:
+        return "\n".join(lines)
+    return None
 
 
 class StateHandlerFactory:
@@ -41,7 +118,14 @@ class StateHandlerFactory:
     async def _handle_greeting(self, request: BotMessageRequest) -> BotMessageResponse:
         restaurant_name_location = await cache_get(
             RESTAURANT_NAME_LOCATION_KEY.format(user_id=request.user_id)
-        ) or RESTAURANT_NAME_LOCATION_FALLBACK
+        )
+        if not restaurant_name_location:
+            profile_json = await _get_restaurant_profile_json(request.user_id)
+            profile_fields = await _get_restaurant_profile_fields(request.user_id)
+            merged_profile = {**profile_fields, **profile_json}
+            restaurant_name_location = _build_name_location(merged_profile)
+
+        restaurant_name_location = restaurant_name_location or RESTAURANT_NAME_LOCATION_FALLBACK
 
         parts = restaurant_name_location.split(',', 1)
         if len(parts) == 2:
@@ -70,7 +154,14 @@ class StateHandlerFactory:
     async def _handle_restaurant_question(self, request: BotMessageRequest) -> BotMessageResponse:
         restaurant_context = await cache_get(
             RESTAURANT_CONTEXT_KEY.format(user_id=request.user_id)
-        ) or RESTAURANT_CONTEXT_FALLBACK
+        )
+        if not restaurant_context:
+            profile_json = await _get_restaurant_profile_json(request.user_id)
+            profile_fields = await _get_restaurant_profile_fields(request.user_id)
+            merged_profile = {**profile_fields, **profile_json}
+            restaurant_context = _build_restaurant_context(merged_profile)
+
+        restaurant_context = restaurant_context or RESTAURANT_CONTEXT_FALLBACK
 
         message = await self._ai.answer_restaurant_question(
             latest_message=request.latest_message,

@@ -1,6 +1,7 @@
-from openai import AsyncOpenAI, OpenAIError
-from src.config import settings
 import json
+
+from openai import AsyncOpenAI, OpenAIError
+
 from src.chatbot.exceptions import AIServiceError
 from src.chatbot.internal_schemas import (
     FoodOrderIntentAnalysis,
@@ -32,6 +33,7 @@ from src.chatbot.prompts import (
     VERIFY_STATE_SYSTEM_PROMPT,
 )
 from src.chatbot.schema import Message, ModifyItem, OrderItem, SwapItems
+from src.config import settings
 
 _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 

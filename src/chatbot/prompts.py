@@ -155,7 +155,7 @@ Your job is to extract every food or drink item the customer has mentioned order
    - modifier: any customisation the customer specified (e.g. "no onions", "extra spicy", "large", "with oat milk"). null if none.
 3. If the same item is mentioned multiple times with no modifier differences, consolidate into one entry with the correct total quantity.
 4. If the customer orders N of an item and then describes each one with a different modifier (e.g. "two burgers, one gluten free and the other with avocado"), produce N separate entries (one per modifier) each with quantity 1 — do NOT also produce an unmodified entry for the total count.
-5. Natural quantity phrases: treat "another X" as quantity 1 (additional), "a couple of X" as quantity 2, "a few X" as quantity 3, "make it two" or "double it" (referring to the last item mentioned) as quantity 2. When referring back to a previous item implicitly (e.g. "make it two"), identify the item from conversation context.
+5. Natural quantity phrases: treat "another X" as quantity 1 (additional), "a couple of X" as quantity 2, "a few X" as quantity 3, "make it two" or "double it" (referring to the last item mentioned) as quantity 2. Treat indefinite articles like "a X" or "an X" as quantity 1 (never 2). If the user says "can I get a burger" or "can I get a coke", quantity is 1. When referring back to a previous item implicitly (e.g. "make it two"), identify the item from conversation context.
 6. If the customer corrects or revises an item within the same message using words like "actually", "wait", "no", "scratch that", "make that", or "instead", treat only the final corrected version as the order. Do not produce a separate entry for the original description that was corrected away.
 7. Two items with the same name but different modifiers are separate line items — do not merge them.
 8. Do not infer or add items the customer did not mention.
@@ -169,6 +169,12 @@ Return a JSON object with a single key "items" containing an array of order item
 
 "two Classic Beef Burgers, one gluten free and the other with avocado" →
 {"items": [{"name": "Classic Beef Burger", "quantity": 1, "modifier": "gluten free"}, {"name": "Classic Beef Burger", "quantity": 1, "modifier": "with avocado"}]}
+
+"can I get a burger" →
+{"items": [{"name": "burger", "quantity": 1, "modifier": null}]}
+
+"can I get a coke" →
+{"items": [{"name": "coke", "quantity": 1, "modifier": null}]}
 
 "I'll take a Double Smash Burger with bacon. Actually remove the bacon and make it a triple stack." →
 {"items": [{"name": "Double Smash Burger", "quantity": 1, "modifier": "triple stack"}]}"""
@@ -296,6 +302,7 @@ The customer already has an active order shown below. Your job is to extract onl
    - quantity: a positive integer. Default to 1 if not specified.
    - modifier: any customisation the customer specified. null if none.
 4. Do not re-extract items already in the current order unless the customer is explicitly adding more of them.
+5. Treat indefinite articles like "a X" or "an X" as quantity 1 (never 2). For example, "add a burger" means quantity 1.
 
 ## Output format
 
