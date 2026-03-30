@@ -1,0 +1,197 @@
+{
+  "convo_id": "convo2",
+  "flow_id": "flow_02_crispy_chicken_meal_spice_changes",
+  "flow_description": "Crispy chicken meal with spice levels and fry seasoning, plus desserts/drinks, then change mind multiple times.",
+  "base_url": "http://localhost:8000/",
+  "flows_file": "regression_user_flows.test_menu.json",
+  "transcript": [
+    {
+      "role": "user",
+      "text": "Hi, placing a pickup order."
+    },
+    {
+      "role": "bot",
+      "text": "It looks like your order is currently empty. Would you like to start a new order? I'm here to help!"
+    },
+    {
+      "role": "user",
+      "text": "Can I get 2 Chicken Tenders & Fries?"
+    },
+    {
+      "role": "bot",
+      "text": "I found a few matches for \"Chicken Tenders\" — did you mean \"1 Chicken Tender\", \"2 Chicken Tenders & Fries\", \"Chicken Sub (throwback to 2008)\", \"2 Chicken Sandos & Fries\", \"1 Chicken Tender and Fries\"? I found a few matches for \"Fries\" — did you mean \"2 Chicken Sandos & Fries\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\", \"Animal Fries\", \"Regular Fries\"?"
+    },
+    {
+      "role": "user",
+      "text": "For the fries seasoning: Nashville Seasoning."
+    },
+    {
+      "role": "bot",
+      "text": "I found a few matches for \"Chicken Tenders\" — did you mean \"1 Chicken Tender\", \"2 Chicken Tenders & Fries\", \"Chicken Sub (throwback to 2008)\", \"2 Chicken Sandos & Fries\", \"1 Chicken Tender and Fries\"? I found a few matches for \"Fries\" — did you mean \"2 Chicken Sandos & Fries\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\", \"Animal Fries\", \"Regular Fries\"?"
+    },
+    {
+      "role": "user",
+      "text": "Tender spice level: Extra Spicy."
+    },
+    {
+      "role": "bot",
+      "text": "I found a few matches for \"Chicken Tender\" — did you mean \"1 Chicken Tender\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\"? I found a few matches for \"Fries\" — did you mean \"2 Chicken Sandos & Fries\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\", \"Animal Fries\", \"Regular Fries\"?"
+    },
+    {
+      "role": "user",
+      "text": "Actually make the tenders Mild instead."
+    },
+    {
+      "role": "bot",
+      "text": "I found a few matches for \"Chicken Tender\" — did you mean \"1 Chicken Tender\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\"? I found a few matches for \"Fries\" — did you mean \"2 Chicken Sandos & Fries\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\", \"Animal Fries\", \"Regular Fries\"?"
+    },
+    {
+      "role": "user",
+      "text": "Make the tenders extra crispy and add a side salad."
+    },
+    {
+      "role": "bot",
+      "text": "Sorry, I couldn't find \"side salad\" on our menu. Could you double-check the name? I found a few matches for \"Chicken Tender\" — did you mean \"1 Chicken Tender\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\"? I found a few matches for \"Fries\" — did you mean \"2 Chicken Sandos & Fries\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\", \"Animal Fries\", \"Regular Fries\"?"
+    },
+    {
+      "role": "user",
+      "text": "Add Jalapeño Poppers on the side."
+    },
+    {
+      "role": "bot",
+      "text": "Got it! I've added 1x Jalapeño Poppers to your order. I found a few matches for \"Chicken Tender\" — did you mean \"1 Chicken Tender\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\"? I found a few matches for \"Fries\" — did you mean \"2 Chicken Sandos & Fries\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\", \"Animal Fries\", \"Regular Fries\"?"
+    },
+    {
+      "role": "user",
+      "text": "And add Battered Onion Rings too."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 2x Chicken Tenders (mild, extra crispy), 1x Fries (Nashville seasoning), 1x Jalapeño Poppers, and 1x Battered Onion Rings. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add a Can Coke Zero."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 2x Chicken Tenders (mild, extra crispy), 1x Fries (Nashville seasoning), 1x Jalapeño Poppers, 1x Battered Onion Rings, and 1x Can Coke Zero. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "No ice in the Coke Zero."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 2x Chicken Tenders (mild, extra crispy), 1x Fries (Nashville seasoning), 1x Jalapeño Poppers, 1x Battered Onion Rings, and 1x Can Coke Zero (no ice). Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Also add 2 Chocolate Chip cookies."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 2x Chicken Tenders (mild, extra crispy), 1x Fries (Nashville seasoning), 1x Jalapeño Poppers, 1x Battered Onion Rings, 1x Can Coke Zero (no ice), and 2x Chocolate Chip cookies. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Change the drink to a Glass Sprite instead."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 2x Chicken Tenders (mild, extra crispy), 1x Fries (Nashville seasoning), 1x Jalapeño Poppers, 1x Battered Onion Rings, 1x Glass Sprite, and 2x Chocolate Chip cookies. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Remove the onion rings."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 2x Chicken Tenders (mild, extra crispy), 1x Fries (Nashville seasoning), 1x Jalapeño Poppers, 1x Glass Sprite, and 2x Chocolate Chip cookies. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add Animal Fries as well."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 2x Chicken Tenders (mild, extra crispy), 1x Fries (Nashville seasoning), 1x Jalapeño Poppers, 1x Animal Fries, 1x Glass Sprite, and 2x Chocolate Chip cookies. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "For the Animal Fries: No Thank You on extra patty."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 2x Chicken Tenders (mild, extra crispy), 1x Fries (Nashville seasoning), 1x Jalapeño Poppers, 1x Animal Fries (no extra patty), 1x Glass Sprite, and 2x Chocolate Chip cookies. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Hold the smash sauce on the Animal Fries."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 2x Chicken Tenders (mild, extra crispy), 1x Fries (Nashville seasoning), 1x Jalapeño Poppers, 1x Animal Fries (no extra patty, hold the smash sauce), 1x Glass Sprite, and 2x Chocolate Chip cookies. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add one sauce: Sweet n Spicy."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 2x Chicken Tenders (mild, extra crispy), 1x Fries (Nashville seasoning), 1x Jalapeño Poppers, 1x Animal Fries (no extra patty, hold the smash sauce), 1x Glass Sprite, 2x Chocolate Chip cookies, and 1x Sweet n Spicy sauce. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Actually make that two Sweet n Spicy sauces."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 2x Chicken Tenders (mild, extra crispy), 1x Fries (Nashville seasoning), 1x Jalapeño Poppers, 1x Animal Fries (no extra patty, hold the smash sauce), 1x Glass Sprite, 2x Chocolate Chip cookies, and 2x Sweet n Spicy sauces. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Cancel the Jalapeño Poppers."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 2x Chicken Tenders (mild, extra crispy), 1x Fries (Nashville seasoning), 1x Animal Fries (no extra patty, hold the smash sauce), 1x Glass Sprite, 2x Chocolate Chip cookies, and 2x Sweet n Spicy sauces. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Ok place it."
+    },
+    {
+      "role": "bot",
+      "text": ""
+    }
+  ],
+  "order_state": {
+    "items": [
+      {
+        "name": "Can Coke Zero",
+        "quantity": 1,
+        "modifier": null
+      },
+      {
+        "name": "Chocolate Chip",
+        "quantity": 2,
+        "modifier": null
+      },
+      {
+        "name": "Animal Fries",
+        "quantity": 1,
+        "modifier": "hold the smash sauce"
+      },
+      {
+        "name": "Sweet n Spicy",
+        "quantity": 2,
+        "modifier": null
+      }
+    ]
+  },
+  "ui": {
+    "pickup_overlay_active": false,
+    "human_overlay_active": false
+  }
+}

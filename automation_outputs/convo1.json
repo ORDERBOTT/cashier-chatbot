@@ -1,0 +1,210 @@
+{
+  "convo_id": "convo1",
+  "flow_id": "flow_01_smash_burger_combo_modifiers",
+  "flow_description": "Smash burger (patty selection + combo fries + lettuce bun), then add-ons/holds, then sides/sauces/drinks, then swap/remove and finalize.",
+  "base_url": "http://localhost:8000/",
+  "flows_file": "regression_user_flows.test_menu.json",
+  "transcript": [
+    {
+      "role": "user",
+      "text": "Hey!"
+    },
+    {
+      "role": "bot",
+      "text": "Welcome to The Burger Joint located at 123 Main St, Anytown, USA! What's your name and what can I get for you today?"
+    },
+    {
+      "role": "user",
+      "text": "I want an All American burger."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Make that a double patty."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty). Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Make it a combo with Cajun Fries."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty), combo with Cajun Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Actually switch the fries to Lemon Pepper Fries."
+    },
+    {
+      "role": "bot",
+      "text": "I found a few matches for \"Cajun Fries\" — did you mean \"2 Chicken Sandos & Fries\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\"? Added 1x Animal Fries to your order."
+    },
+    {
+      "role": "user",
+      "text": "Add Beef Bacon and Jalepeno on the burger."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno), 1x Animal Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Can you make it medium-rare and cut it in half?"
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno), 1x Animal Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Also add Grilled Shaved Onion."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion), 1x Animal Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "No sliced tomato and no pickles on that All American."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, no sliced tomato, no pickles), 1x Animal Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add avocado and pepper jack too."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, avocado, pepper jack, no sliced tomato, no pickles), 1x Animal Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Do the Lettuce Bun on that burger."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, avocado, pepper jack, Lettuce Bun, no sliced tomato, no pickles), 1x Animal Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add an order of Animal Fries too."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, avocado, pepper jack, Lettuce Bun, no sliced tomato, no pickles), 2x Animal Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "For the Animal Fries, add Extra Smash Patty."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, avocado, pepper jack, Lettuce Bun, no sliced tomato, no pickles), 2x Animal Fries (Extra Smash Patty). Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "But hold the jalapeno on the Animal Fries."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, avocado, pepper jack, Lettuce Bun, no sliced tomato, no pickles), 2x Animal Fries (Extra Smash Patty, no jalapeno). Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add a side of Mozzarella Sticks."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, avocado, pepper jack, Lettuce Bun, no sliced tomato, no pickles), 2x Animal Fries (Extra Smash Patty, no jalapeno), 1x Mozzarella Sticks. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add 2 Ranch sauces and 1 Hot Honey."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, avocado, pepper jack, Lettuce Bun, no sliced tomato, no pickles), 2x Animal Fries (Extra Smash Patty, no jalapeno), 1x Mozzarella Sticks, 2x Ranch, 1x Hot Honey. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Make the drink a Glass Coke."
+    },
+    {
+      "role": "bot",
+      "text": "Updated All American: now 1× (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, avocado, pepper jack, Lettuce Bun, no sliced tomato, no pickles) Updated Animal Fries: now 2× (Extra Smash Patty, no jalapeno) Updated Mozzarella Sticks: now 1× Updated Ranch: now 2× Updated Hot Honey: now 1× I found a few matches for \"Coke\" — did you mean \"Glass Coke\", \"Can Diet Coke\", \"Can Coke\", \"Can Coke Zero\"?"
+    },
+    {
+      "role": "user",
+      "text": "Actually can I get a Diet Dr Pepper instead?"
+    },
+    {
+      "role": "bot",
+      "text": "Updated All American: now 1× (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, avocado, pepper jack, Lettuce Bun, no sliced tomato, no pickles) Updated Animal Fries: now 2× (Extra Smash Patty, no jalapeno) Updated Mozzarella Sticks: now 1× Updated Ranch: now 2× Updated Hot Honey: now 1× I found a few matches for \"Coke\" — did you mean \"Glass Coke\", \"Can Diet Coke\", \"Can Coke\", \"Can Coke Zero\"?"
+    },
+    {
+      "role": "user",
+      "text": "Wait—remove the Mozzarella Sticks."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, avocado, pepper jack, Lettuce Bun, no sliced tomato, no pickles), 2x Animal Fries (Extra Smash Patty, no jalapeno), 2x Ranch, 1x Hot Honey, 1x Diet Dr Pepper. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Swap the Glass Coke for a Can Sprite Zero."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x All American (double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, avocado, pepper jack, Lettuce Bun, no sliced tomato, no pickles), 2x Animal Fries (Extra Smash Patty, no jalapeno), 2x Ranch, 1x Hot Honey, 1x Can Sprite Zero. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Ok that’s it."
+    },
+    {
+      "role": "bot",
+      "text": ""
+    }
+  ],
+  "order_state": {
+    "items": [
+      {
+        "name": "All American",
+        "quantity": 1,
+        "modifier": "double patty, medium-rare, cut in half, combo with Lemon Pepper Fries, Beef Bacon, Jalapeno, Grilled Shaved Onion, avocado, pepper jack, Lettuce Bun, no sliced tomato, no pickles"
+      },
+      {
+        "name": "Animal Fries",
+        "quantity": 2,
+        "modifier": "Extra Smash Patty, no jalapeno"
+      },
+      {
+        "name": "Ranch",
+        "quantity": 2,
+        "modifier": null
+      },
+      {
+        "name": "Hot Honey",
+        "quantity": 1,
+        "modifier": null
+      },
+      {
+        "name": "Can Sprite Zero",
+        "quantity": 1,
+        "modifier": null
+      }
+    ]
+  },
+  "ui": {
+    "pickup_overlay_active": false,
+    "human_overlay_active": false
+  }
+}

@@ -322,3 +322,31 @@ alembic upgrade head
 alembic downgrade -1
 alembic current
 ```
+
+---
+
+## UI Regression Automation
+
+This repo includes a Selenium UI driver that replays user-only message flows in the browser UI and **keeps each flow window open** for manual validation.
+
+### Install Selenium
+
+```bash
+uv add selenium
+```
+
+### Run the flows
+
+1. Start the server:
+
+```bash
+uv run uvicorn src.main:app --reload
+```
+
+2. In a new terminal, run:
+
+```bash
+uv run python scripts/automated_testing.py --flows-file regression_user_flows.test_menu.json
+```
+
+The script will open **one new browser window per flow** and will not close them. Press `Ctrl+C` in the terminal when you're done reviewing, then close the browser windows.

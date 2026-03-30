@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -25,6 +26,87 @@ def _parse_safely_fo(value: str | None) -> FoodOrderState | None:
 CONFIRMED_THRESHOLD = 70     # single top match at or above this → confirmed
 NOT_FOUND_THRESHOLD = 50     # top match below this → item does not exist on menu
 AMBIGUITY_GAP = 6            # top N matches within this score range of each other → ambiguous
+
+# Fuzzy-match gating: avoid mapping "Cajun Fries" → "2 Chicken Tenders & Fries" via the word "fries" alone.
+_MATCH_STOPWORDS = frozenset({
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "with",
+    "of",
+    "for",
+    "to",
+    "in",
+    "on",
+    "at",
+    "no",
+    "not",
+    "extra",
+    "add",
+    "make",
+    "want",
+    "get",
+    "ill",
+    "i",
+    "id",
+    "please",
+    "thanks",
+    "thank",
+    "you",
+    "combo",
+    "order",
+    "side",
+    "hold",
+    "without",
+})
+_MENU_GENERIC_TOKENS = frozenset({
+    "fries",
+    "fry",
+    "sauce",
+    "sauces",
+    "drink",
+    "patty",
+    "cheese",
+    "burger",
+    "sandwich",
+    "sando",
+    "sandos",
+    "tenders",
+    "tender",
+    "chicken",
+    "ring",
+    "rings",
+    "salad",
+    "cookie",
+    "cookies",
+    "meal",
+})
+
+
+def _norm_tokens(text: str) -> set[str]:
+    return {
+        t
+        for t in re.findall(r"[a-z0-9']+", text.lower())
+        if len(t) > 1 and t not in _MATCH_STOPWORDS
+    }
+
+
+def _match_compatible(query: str, candidate: str) -> bool:
+    q_raw, c_raw = query.strip().lower(), candidate.strip().lower()
+    if q_raw == c_raw:
+        return True
+    if len(q_raw) >= 4 and (q_raw in c_raw or c_raw in q_raw):
+        return True
+    qt, ct = _norm_tokens(query), _norm_tokens(candidate)
+    overlap = qt & ct
+    if not overlap:
+        return False
+    non_generic = overlap - _MENU_GENERIC_TOKENS
+    if non_generic:
+        return True
+    return len(overlap) >= 2
 
 
 @dataclass
@@ -112,8 +194,10 @@ class FoodOrderHandlerFactory:
             item.name,
             menu_names,
             scorer=fuzz.WRatio,
-            limit=5,
+            limit=12,
         )  # [(name, score, index), ...]
+
+        top_matches = [m for m in top_matches if _match_compatible(item.name, m[0])]
 
         if not top_matches or top_matches[0][1] < NOT_FOUND_THRESHOLD:
             return _MatchResult(item=item, status="not_found")
@@ -205,26 +289,41 @@ class FoodOrderHandlerFactory:
         items_to_remove: list[dict],
     ) -> tuple[list[dict], list[str], list[str]]:
         """Returns (updated_items, removed_summaries, not_in_order_names)."""
-        current = {item["name"]: dict(item) for item in order_state.get("items", [])}
+        items = [dict(row) for row in order_state.get("items", [])]
         removed_summaries: list[str] = []
         not_in_order: list[str] = []
 
-        for item in items_to_remove:
-            name = item["name"]
-            qty = item["quantity"]
+        for raw in items_to_remove:
+            name = raw["name"]
+            qty = raw["quantity"]
+            mod = raw.get("modifier")
 
-            if name not in current:
+            idx: int | None = None
+            if mod is not None:
+                for i, row in enumerate(items):
+                    if row["name"] == name and row.get("modifier") == mod:
+                        idx = i
+                        break
+            if idx is None:
+                for i, row in enumerate(items):
+                    if row["name"] == name:
+                        idx = i
+                        break
+
+            if idx is None:
                 not_in_order.append(name)
                 continue
 
-            if qty >= current[name]["quantity"]:
-                del current[name]
+            cur = items[idx]
+            cur_qty = cur["quantity"]
+            if qty >= cur_qty:
+                items.pop(idx)
                 removed_summaries.append(f"{name} (removed entirely)")
             else:
-                current[name]["quantity"] -= qty
-                removed_summaries.append(f"{name} (now {current[name]['quantity']}x)")
+                cur["quantity"] = cur_qty - qty
+                removed_summaries.append(f"{name} (now {cur['quantity']}x)")
 
-        return list(current.values()), removed_summaries, not_in_order
+        return items, removed_summaries, not_in_order
 
     def _build_remove_response(
         self,

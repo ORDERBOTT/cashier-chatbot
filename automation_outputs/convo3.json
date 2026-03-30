@@ -1,0 +1,207 @@
+{
+  "convo_id": "convo3",
+  "flow_id": "flow_03_boneless_wings_flavor_and_combo_swaps",
+  "flow_description": "Boneless wings flavor selection + combo fries, then switch flavors, add sauces and drinks, then swap fries and remove an item.",
+  "base_url": "http://localhost:8000/",
+  "flows_file": "regression_user_flows.test_menu.json",
+  "transcript": [
+    {
+      "role": "user",
+      "text": "Yo!"
+    },
+    {
+      "role": "bot",
+      "text": "Welcome to The Burger Joint located at 123 Main St, Anytown, USA! What's your name and what can I get for you today?"
+    },
+    {
+      "role": "user",
+      "text": "I want 6Pc Boneless."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Flavor: Garlic Parm."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Garlic Parm. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Make it a combo with Plain Fries."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Garlic Parm, combo with Plain Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Actually switch the fries to Nashville Seasoning Fries."
+    },
+    {
+      "role": "bot",
+      "text": "I found a few matches for \"Plain Fries\" — did you mean \"2 Chicken Sandos & Fries\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\"? I found a few matches for \"Nashville Seasoning Fries\" — did you mean \"Animal Fries\", \"Regular Fries\"?"
+    },
+    {
+      "role": "user",
+      "text": "Change the flavor to Hot Honey."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Hot Honey, combo with Nashville Seasoning Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Wait no—make it Spicy Garlic Parm instead."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Spicy Garlic Parm, combo with Nashville Seasoning Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Also make them grilled not fried."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Spicy Garlic Parm, grilled, combo with Nashville Seasoning Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add a side of Regular Fries too."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Spicy Garlic Parm, grilled, combo with Nashville Seasoning Fries, and a side of Regular Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "For the Regular Fries seasoning: Salt and Pepper."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Spicy Garlic Parm, grilled, combo with Nashville Seasoning Fries, and a side of Regular Fries with Salt and Pepper. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add Buffalo sauce and Ranch."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Spicy Garlic Parm, grilled, combo with Nashville Seasoning Fries, a side of Regular Fries with Salt and Pepper, plus Buffalo sauce and Ranch. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add one Chili Mango sauce as well."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Spicy Garlic Parm, grilled, combo with Nashville Seasoning Fries, a side of Regular Fries with Salt and Pepper, plus Buffalo sauce, Ranch, and one Chili Mango sauce. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add a Can Diet Coke."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Spicy Garlic Parm, grilled, combo with Nashville Seasoning Fries, a side of Regular Fries with Salt and Pepper, plus Buffalo sauce, Ranch, one Chili Mango sauce, and a Can Diet Coke. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "And throw in a bottle of water."
+    },
+    {
+      "role": "bot",
+      "text": "I found a few matches for \"bottle of water\" — did you mean \"Hot Dog\"?"
+    },
+    {
+      "role": "user",
+      "text": "Also add Cookies 'N Cream cookie."
+    },
+    {
+      "role": "bot",
+      "text": "Got it! I've added 1x Cookies 'N Cream to your order. I found a few matches for \"bottle of water\" — did you mean \"Hot Dog\"?"
+    },
+    {
+      "role": "user",
+      "text": "Remove the extra Regular Fries."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Spicy Garlic Parm, grilled, combo with Nashville Seasoning Fries, plus Buffalo sauce, Ranch, one Chili Mango sauce, a Can Diet Coke, and 1x Cookies 'N Cream. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Make the combo fries Cajun Fries now."
+    },
+    {
+      "role": "bot",
+      "text": "Updated 6Pc Boneless: now 1× (Spicy Garlic Parm, grilled) I found a few matches for \"Nashville Seasoning Fries\" — did you mean \"Animal Fries\", \"Regular Fries\"? \"Regular Fries\" not found in your order."
+    },
+    {
+      "role": "user",
+      "text": "Add Mozzarella Sticks."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Spicy Garlic Parm, grilled, combo with Cajun Fries, plus Buffalo sauce, Ranch, one Chili Mango sauce, a Can Diet Coke, 1x Cookies 'N Cream, and 1x Mozzarella Sticks. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Actually cancel the Mozzarella Sticks."
+    },
+    {
+      "role": "bot",
+      "text": "So you've got: 1x 6Pc Boneless with Spicy Garlic Parm, grilled, combo with Cajun Fries, plus Buffalo sauce, Ranch, one Chili Mango sauce, a Can Diet Coke, and 1x Cookies 'N Cream. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Ok done."
+    },
+    {
+      "role": "bot",
+      "text": ""
+    }
+  ],
+  "order_state": {
+    "items": [
+      {
+        "name": "6Pc Boneless",
+        "quantity": 1,
+        "modifier": "Spicy Garlic Parm, grilled"
+      },
+      {
+        "name": "Buffalo",
+        "quantity": 1,
+        "modifier": null
+      },
+      {
+        "name": "Ranch",
+        "quantity": 1,
+        "modifier": null
+      },
+      {
+        "name": "Chili Mango",
+        "quantity": 1,
+        "modifier": null
+      },
+      {
+        "name": "Can Diet Coke",
+        "quantity": 1,
+        "modifier": null
+      },
+      {
+        "name": "Cookies 'N Cream",
+        "quantity": 1,
+        "modifier": null
+      }
+    ]
+  },
+  "ui": {
+    "pickup_overlay_active": false,
+    "human_overlay_active": false
+  }
+}

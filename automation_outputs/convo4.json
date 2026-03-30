@@ -1,0 +1,205 @@
+{
+  "convo_id": "convo4",
+  "flow_id": "flow_04_chicken_sub_throwback_combo_cancel_restart",
+  "flow_description": "Chicken sub with required extra-chicken selection + combo fries + recommended add-ons, then full cancel and restart with a different complex order.",
+  "base_url": "http://localhost:8000/",
+  "flows_file": "regression_user_flows.test_menu.json",
+  "transcript": [
+    {
+      "role": "user",
+      "text": "Hello!"
+    },
+    {
+      "role": "bot",
+      "text": "Welcome to The Burger Joint located at 123 Main St, Anytown, USA! What's your name and what can I get for you today?"
+    },
+    {
+      "role": "user",
+      "text": "Get me the Chicken Sub (throwback to 2008)."
+    },
+    {
+      "role": "bot",
+      "text": "I found a few matches for \"Chicken Sub\" — did you mean \"Chicken Sub (throwback to 2008)\", \"2 Chicken Sandos & Fries\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\", \"Chicken Shawarma - Smash Way\"?"
+    },
+    {
+      "role": "user",
+      "text": "For Extra Chicken: No Thank You."
+    },
+    {
+      "role": "bot",
+      "text": "Great choice! So you've got: 1x Chicken Sub (throwback to 2008). Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Make it a combo with Nashville Seasoning Fries."
+    },
+    {
+      "role": "bot",
+      "text": "Got it! So you've got: 1x Chicken Sub (throwback to 2008), combo with Nashville Seasoning Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add Animal Fries as a side too."
+    },
+    {
+      "role": "bot",
+      "text": "Perfect! So you've got: 1x Chicken Sub (throwback to 2008), combo with Nashville Seasoning Fries, and 1x Animal Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add Battered Onion Rings as well."
+    },
+    {
+      "role": "bot",
+      "text": "Sure thing! So you've got: 1x Chicken Sub (throwback to 2008), combo with Nashville Seasoning Fries, 1x Animal Fries, and 1x Battered Onion Rings. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Swap the bread to a gluten-free wrap."
+    },
+    {
+      "role": "bot",
+      "text": "Absolutely! So you've got: 1x Chicken Sub (throwback to 2008) in a gluten-free wrap, combo with Nashville Seasoning Fries, 1x Animal Fries, and 1x Battered Onion Rings. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add a Can Sprite."
+    },
+    {
+      "role": "bot",
+      "text": "Got it! So you've got: 1x Chicken Sub (throwback to 2008) in a gluten-free wrap, combo with Nashville Seasoning Fries, 1x Animal Fries, 1x Battered Onion Rings, and 1x Can Sprite. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add M&M Chocolate Chip cookie."
+    },
+    {
+      "role": "bot",
+      "text": "I found a few matches for \"M&M Chocolate Chip cookie\" — did you mean \"M&M Chocolate Chip\", \"Chocolate Chip\"?"
+    },
+    {
+      "role": "user",
+      "text": "Actually, change the combo fries to Cajun Fries."
+    },
+    {
+      "role": "bot",
+      "text": "Updated Chicken Sub (throwback to 2008): now 1× (gluten-free wrap) Updated Animal Fries: now 1× Updated Battered Onion Rings: now 1× Updated Can Sprite: now 1× I found a few matches for \"Cajun Fries\" — did you mean \"2 Chicken Sandos & Fries\", \"1 Chicken Tender and Fries\", \"2 Chicken Tenders & Fries\"?"
+    },
+    {
+      "role": "user",
+      "text": "Remove the onion rings."
+    },
+    {
+      "role": "bot",
+      "text": "No problem! So you've got: 1x Chicken Sub (throwback to 2008) in a gluten-free wrap, 1x Cajun Fries, 1x Animal Fries, and 1x Can Sprite. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add Hot Honey sauce."
+    },
+    {
+      "role": "bot",
+      "text": "I found a few matches for \"Hot Honey sauce\" — did you mean \"Hot Honey\", \"Hot Dog\"?"
+    },
+    {
+      "role": "user",
+      "text": "Wait—cancel everything, I want to start over."
+    },
+    {
+      "role": "bot",
+      "text": "No problem at all! Your order has been canceled. Would you like to start a new order?"
+    },
+    {
+      "role": "user",
+      "text": "New order: All American."
+    },
+    {
+      "role": "bot",
+      "text": "Great choice! So you've got: 1x All American. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Make it a triple patty."
+    },
+    {
+      "role": "bot",
+      "text": "Got it! So you've got: 1x All American (triple patty). Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Combo with Lemon Pepper Fries."
+    },
+    {
+      "role": "bot",
+      "text": "Perfect! So you've got: 1x All American (triple patty), combo with Lemon Pepper Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add Onion Ring and Beef Bacon on the burger."
+    },
+    {
+      "role": "bot",
+      "text": "Sure thing! So you've got: 1x All American (triple patty, onion ring, beef bacon), combo with Lemon Pepper Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "No mayo and no mustard on the burger."
+    },
+    {
+      "role": "bot",
+      "text": "Got it! So you've got: 1x All American (triple patty, onion ring, beef bacon, no mayo, no mustard), combo with Lemon Pepper Fries. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Add a Glass Coke."
+    },
+    {
+      "role": "bot",
+      "text": "Great addition! So you've got: 1x All American (triple patty, onion ring, beef bacon, no mayo, no mustard), combo with Lemon Pepper Fries, and 1x Glass Coke. Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "Also add Animal Fries, but hold the grilled onion on it."
+    },
+    {
+      "role": "bot",
+      "text": "Sure thing! So you've got: 1x All American (triple patty, onion ring, beef bacon, no mayo, no mustard), combo with Lemon Pepper Fries, 1x Glass Coke, and 1x Animal Fries (hold the grilled onion). Is that all?"
+    },
+    {
+      "role": "user",
+      "text": "That's all."
+    },
+    {
+      "role": "bot",
+      "text": ""
+    }
+  ],
+  "order_state": {
+    "items": [
+      {
+        "name": "All American",
+        "quantity": 1,
+        "modifier": null
+      },
+      {
+        "name": "Animal Fries",
+        "quantity": 1,
+        "modifier": null
+      },
+      {
+        "name": "Glass Coke",
+        "quantity": 1,
+        "modifier": null
+      },
+      {
+        "name": "Animal Fries",
+        "quantity": 1,
+        "modifier": "hold the grilled onion"
+      }
+    ]
+  },
+  "ui": {
+    "pickup_overlay_active": false,
+    "human_overlay_active": false
+  }
+}

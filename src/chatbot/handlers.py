@@ -93,14 +93,19 @@ class StateHandlerFactory:
 
     async def _handle_food_order(self, request: BotMessageRequest) -> BotMessageResponse:
         response = await self._food_order_factory.handle(request)
+        items = (response.order_state or {}).get("items") or []
+        has_items = bool(items)
         if not response.has_pending_clarification:
-            polished = await self._ai.polish_food_order_reply(
-                order_state=response.order_state or {},
-                latest_message=request.latest_message,
-                message_history=request.message_history,
-            )
-            response.chatbot_message = polished
-            has_items = bool((response.order_state or {}).get("items"))
+            raw_msg = (response.chatbot_message or "").lower()
+            # Do not let the polisher replace matcher clarifications with "empty cart" copy when the cart is empty.
+            should_polish = has_items or "cancel" in raw_msg
+            if should_polish:
+                polished = await self._ai.polish_food_order_reply(
+                    order_state=response.order_state or {},
+                    latest_message=request.latest_message,
+                    message_history=request.message_history,
+                )
+                response.chatbot_message = polished
             response.awaiting_order_confirmation = has_items
         return response
 

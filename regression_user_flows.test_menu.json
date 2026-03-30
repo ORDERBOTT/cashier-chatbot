@@ -1,0 +1,116 @@
+{
+  "source_menu_file": "test_menu.json",
+  "notes": [
+    "User-only messages for regression testing.",
+    "Each flow is 15-20 user messages and intentionally includes add/remove/swap/cancel/restart, option changes, and mild ambiguity."
+  ],
+  "flows": [
+    {
+      "id": "flow_01_smash_burger_combo_modifiers",
+      "description": "Smash burger (patty selection + combo fries + lettuce bun), then add-ons/holds, then sides/sauces/drinks, then swap/remove and finalize.",
+      "user_messages": [
+        "Hey!",
+        "I want an All American burger.",
+        "Make that a double patty.",
+        "Make it a combo with Cajun Fries.",
+        "Actually switch the fries to Lemon Pepper Fries.",
+        "Add Beef Bacon and Jalepeno on the burger.",
+        "Can you make it medium-rare and cut it in half?",
+        "Also add Grilled Shaved Onion.",
+        "No sliced tomato and no pickles on that All American.",
+        "Add avocado and pepper jack too.",
+        "Do the Lettuce Bun on that burger.",
+        "Add an order of Animal Fries too.",
+        "For the Animal Fries, add Extra Smash Patty.",
+        "But hold the jalapeno on the Animal Fries.",
+        "Add a side of Mozzarella Sticks.",
+        "Add 2 Ranch sauces and 1 Hot Honey.",
+        "Make the drink a Glass Coke.",
+        "Actually can I get a Diet Dr Pepper instead?",
+        "Wait—remove the Mozzarella Sticks.",
+        "Swap the Glass Coke for a Can Sprite Zero.",
+        "Ok that’s it."
+      ]
+    },
+    {
+      "id": "flow_02_crispy_chicken_meal_spice_changes",
+      "description": "Crispy chicken meal with spice levels and fry seasoning, plus desserts/drinks, then change mind multiple times.",
+      "user_messages": [
+        "Hi, placing a pickup order.",
+        "Can I get 2 Chicken Tenders & Fries?",
+        "For the fries seasoning: Nashville Seasoning.",
+        "Tender spice level: Extra Spicy.",
+        "Actually make the tenders Mild instead.",
+        "Make the tenders extra crispy and add a side salad.",
+        "Add Jalapeño Poppers on the side.",
+        "And add Battered Onion Rings too.",
+        "Add a Can Coke Zero.",
+        "No ice in the Coke Zero.",
+        "Also add 2 Chocolate Chip cookies.",
+        "Change the drink to a Glass Sprite instead.",
+        "Remove the onion rings.",
+        "Add Animal Fries as well.",
+        "For the Animal Fries: No Thank You on extra patty.",
+        "Hold the smash sauce on the Animal Fries.",
+        "Add one sauce: Sweet n Spicy.",
+        "Actually make that two Sweet n Spicy sauces.",
+        "Cancel the Jalapeño Poppers.",
+        "Ok place it."
+      ]
+    },
+    {
+      "id": "flow_03_boneless_wings_flavor_and_combo_swaps",
+      "description": "Boneless wings flavor selection + combo fries, then switch flavors, add sauces and drinks, then swap fries and remove an item.",
+      "user_messages": [
+        "Yo!",
+        "I want 6Pc Boneless.",
+        "Flavor: Garlic Parm.",
+        "Make it a combo with Plain Fries.",
+        "Actually switch the fries to Nashville Seasoning Fries.",
+        "Change the flavor to Hot Honey.",
+        "Wait no—make it Spicy Garlic Parm instead.",
+        "Also make them grilled not fried.",
+        "Add a side of Regular Fries too.",
+        "For the Regular Fries seasoning: Salt and Pepper.",
+        "Add Buffalo sauce and Ranch.",
+        "Add one Chili Mango sauce as well.",
+        "Add a Can Diet Coke.",
+        "And throw in a bottle of water.",
+        "Also add Cookies 'N Cream cookie.",
+        "Remove the extra Regular Fries.",
+        "Make the combo fries Cajun Fries now.",
+        "Add Mozzarella Sticks.",
+        "Actually cancel the Mozzarella Sticks.",
+        "Ok done."
+      ]
+    },
+    {
+      "id": "flow_04_chicken_sub_throwback_combo_cancel_restart",
+      "description": "Chicken sub with required extra-chicken selection + combo fries + recommended add-ons, then full cancel and restart with a different complex order.",
+      "user_messages": [
+        "Hello!",
+        "Get me the Chicken Sub (throwback to 2008).",
+        "For Extra Chicken: No Thank You.",
+        "Make it a combo with Nashville Seasoning Fries.",
+        "Add Animal Fries as a side too.",
+        "Add Battered Onion Rings as well.",
+        "Swap the bread to a gluten-free wrap.",
+        "Add a Can Sprite.",
+        "Add M&M Chocolate Chip cookie.",
+        "Actually, change the combo fries to Cajun Fries.",
+        "Remove the onion rings.",
+        "Add Hot Honey sauce.",
+        "Wait—cancel everything, I want to start over.",
+        "New order: All American.",
+        "Make it a triple patty.",
+        "Combo with Lemon Pepper Fries.",
+        "Add Onion Ring and Beef Bacon on the burger.",
+        "No mayo and no mustard on the burger.",
+        "Add a Glass Coke.",
+        "Also add Animal Fries, but hold the grilled onion on it.",
+        "That's all."
+      ]
+    }
+  ]
+}
+
