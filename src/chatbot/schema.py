@@ -54,3 +54,7 @@ class BotMessageResponse(BaseModel):
     awaiting_order_confirmation: bool = False
     has_pending_clarification: bool = False
     customer_name: str | None = None
+
+
+class TestResultsSaveRequest(BaseModel):
+    content: str  # pre-formatted text to write verbatim

@@ -6,12 +6,11 @@ from src.chatbot.constants import ConversationState
 from src.chatbot.exceptions import UnhandledStateError
 from src.chatbot.food_order_handlers import FoodOrderHandlerFactory
 from src.chatbot.schema import BotMessageRequest, BotMessageResponse
+from src.menu.loader import get_menu_context
 
 RESTAURANT_CONTEXT_KEY = "restaurant_context:{user_id}"
 RESTAURANT_CONTEXT_FALLBACK = "No specific restaurant information is available at this time."
 
-MENU_CONTEXT_KEY = "menu_context:{user_id}"
-MENU_CONTEXT_FALLBACK = "No menu information is available at this time."
 
 RESTAURANT_NAME_LOCATION_KEY = "restaurant_name_location:{user_id}"
 RESTAURANT_NAME_LOCATION_FALLBACK = "No restaurant name or location is available at this time."
@@ -171,10 +170,7 @@ class StateHandlerFactory:
         return BotMessageResponse(chatbot_message=message, order_state=request.order_state)
 
     async def _handle_menu_question(self, request: BotMessageRequest) -> BotMessageResponse:
-        menu_context = await cache_get(
-            MENU_CONTEXT_KEY.format(user_id=request.user_id)
-        ) or MENU_CONTEXT_FALLBACK
-
+        menu_context = get_menu_context()
         message = await self._ai.answer_menu_question(
             latest_message=request.latest_message,
             menu_context=menu_context,

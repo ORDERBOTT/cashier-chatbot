@@ -4,14 +4,12 @@ from typing import Literal
 
 from rapidfuzz import fuzz, process, utils
 
-from src.cache import cache_get
 from src.chatbot.chatbot_ai import ChatbotAI
 from src.chatbot.constants import FoodOrderState
 from src.chatbot.exceptions import UnhandledStateError
 from src.chatbot.schema import BotMessageRequest, BotMessageResponse, ModifyItem, OrderItem
 from src.chatbot.state_resolver import FoodOrderStateResolver
-
-MENU_ITEM_NAMES_KEY = "menu_item_names:{user_id}"
+from src.menu.loader import get_menu_item_names
 
 
 def _parse_safely_fo(value: str | None) -> FoodOrderState | None:
@@ -105,11 +103,8 @@ class FoodOrderHandlerFactory:
 
     # ── Fuzzy matching ────────────────────────────────────────────────────────
 
-    async def _fetch_menu_names(self, user_id: str) -> list[str]:
-        raw = await cache_get(MENU_ITEM_NAMES_KEY.format(user_id=user_id))
-        if not raw:
-            return []
-        return [name.strip() for name in raw.split(",")]
+    async def _fetch_menu_names(self, _user_id: str) -> list[str]:
+        return get_menu_item_names()
 
     def _match_item(self, item: OrderItem, menu_names: list[str]) -> _MatchResult:
         if not menu_names:
