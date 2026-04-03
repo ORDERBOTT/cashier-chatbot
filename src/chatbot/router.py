@@ -3,17 +3,15 @@ from datetime import datetime
 
 from fastapi import APIRouter
 
-from src.chatbot.schema import BotMessageRequest, TestResultsSaveRequest
-from src.chatbot.service import ChatReplyService
+from src.chatbot.infrastructure.service import ChatReplyService
+from src.chatbot.schema import BotInteractionRequest, TestResultsSaveRequest
 
 router = APIRouter(prefix="/api/bot", tags=["chatbot"])
 
-
 @router.post("/message")
-async def bot_message(request: BotMessageRequest):
+async def bot_message(request: BotInteractionRequest):
     service = ChatReplyService()
     return await service.process_and_reply(request)
-
 
 @router.post("/save-test-results")
 async def save_test_results(body: TestResultsSaveRequest):

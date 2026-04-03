@@ -39,22 +39,16 @@ _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 class ChatbotAI:
-    async def analyze_intent(
+    async def detectUserIntent(
         self,
         latest_message: str,
         message_history: list[Message] | None = None,
         previous_state: str | None = None,
-        has_pending_clarification: bool = False,
     ) -> IntentAnalysis:
         history = [m.model_dump() for m in (message_history or [])[-10:]]
         messages: list[dict] = [{"role": "system", "content": ANALYZE_INTENT_SYSTEM_PROMPT}]
         if previous_state:
             messages.append({"role": "system", "content": f"Previous conversation state: {previous_state}"})
-        if has_pending_clarification:
-            messages.append({
-                "role": "system",
-                "content": "Context: the bot just asked the customer a clarification question (e.g. 'did you mean X or Y?'). Their reply is likely a food_order response — lean towards food_order unless the message clearly indicates something else.",
-            })
         messages.extend(history)
         messages.append({"role": "user", "content": latest_message})
 
@@ -533,12 +527,10 @@ class ChatbotAI:
         proposed_order_state: dict,
         latest_message: str,
         message_history: list[Message] | None = None,
-        has_pending_clarification: bool = False,
     ) -> OrderSupervisionResult:
         history = [m.model_dump() for m in (message_history or [])]
         context_lines = [
             f"Proposed order state: {proposed_order_state}",
-            f"Has pending clarification: {has_pending_clarification}",
         ]
         messages: list[dict] = [
             {"role": "system", "content": SUPERVISE_ORDER_STATE_SYSTEM_PROMPT},
