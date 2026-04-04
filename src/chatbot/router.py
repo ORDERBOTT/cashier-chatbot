@@ -10,8 +10,8 @@ router = APIRouter(prefix="/api/bot", tags=["chatbot"])
 
 @router.post("/message")
 async def bot_message(request: BotInteractionRequest):
-    service = ChatReplyService()
-    return await service.process_and_reply(request)
+    chatbot = ChatReplyService()
+    return await chatbot.interpret_and_respond(request)
 
 @router.post("/save-test-results")
 async def save_test_results(body: TestResultsSaveRequest):

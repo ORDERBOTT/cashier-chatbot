@@ -60,3 +60,8 @@ class ModifierJourneyAnalysis(BaseModel):
     intent: Literal["providing_selection", "not_providing_selection"]
     confidence: Literal["high", "medium", "low"]
     reasoning: str
+
+
+class CustomerNameAnalysis(BaseModel):
+    full_name: str | None = None
+    confidence: Literal["high", "medium", "low"]

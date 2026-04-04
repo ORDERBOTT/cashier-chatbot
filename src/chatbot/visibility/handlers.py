@@ -108,7 +108,7 @@ class StateHandlerFactory:
             ConversationState.ORDER_COMPLETE: self._handle_order_complete,
         }
 
-    async def handle(self, state: ConversationState, request: BotInteractionRequest) -> ChatbotResponse:
+    async def respond_to_message(self, state: ConversationState, request: BotInteractionRequest) -> ChatbotResponse:
         handler = self._handlers.get(state)
         if handler is None:
             raise UnhandledStateError(f"No handler registered for state: '{state}'")

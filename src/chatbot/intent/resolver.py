@@ -5,6 +5,7 @@ from src.chatbot.intent.ai_client import (
     analyze_food_order_intent,
     analyze_modifier_state_intent,
     detect_user_intent,
+    get_customer_name,
     verify_food_order_state,
     verify_modifier_state,
 )
@@ -20,7 +21,15 @@ from src.chatbot.utils import _parse_food_order_state, _parse_modifier_state
 
 class ConversationStateResolver:
 
-    async def detectConversationState(self, latest_message: str, message_history: list[Message] | None, previous_state: ConversationState | None,) -> tuple[ConversationState, str | None]:
+    async def get_user_name(self, message_history: list[Message] | None, latest_message: str, customer_name: str | None) -> str | None:
+        if customer_name:
+            return customer_name
+        result = await get_customer_name(message_history, latest_message)
+        if result.confidence == "high" and result.full_name:
+            return result.full_name
+        return None
+
+    async def resolve_user_intent(self, latest_message: str, message_history: list[Message] | None, previous_state: ConversationState | None,) -> ConversationState:
         analysis = await detect_user_intent(
             latest_message=latest_message,
             message_history=message_history,
@@ -30,9 +39,9 @@ class ConversationStateResolver:
 
         # Might be a little too strict, but we don't want to be too lenient with the state transitions.
         if await self._is_valid_intent_transition(previous_state, analysis.state, analysis.confidence):
-            return analysis.state, analysis.name
+            return analysis.state
 
-        return ConversationState.VAGUE_MESSAGE, analysis.name
+        return ConversationState.VAGUE_MESSAGE
     
     async def _is_valid_intent_transition(self, previous: ConversationState | None, proposed: ConversationState | None, confidence: Literal["high", "medium", "low"] | None) -> bool:
         if confidence != "high":

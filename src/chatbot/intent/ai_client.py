@@ -4,6 +4,7 @@ from openai import AsyncOpenAI, OpenAIError
 
 from src.chatbot.exceptions import AIServiceError
 from src.chatbot.internal_schemas import (
+    CustomerNameAnalysis,
     FoodOrderIntentAnalysis,
     FoodOrderStateVerification,
     IntentAnalysis,
@@ -17,6 +18,7 @@ from src.chatbot.intent.prompts import (
     ANALYZE_INTENT_SYSTEM_PROMPT,
     ANALYZE_MODIFIER_JOURNEY_INTENT_SYSTEM_PROMPT,
     ANALYZE_MODIFIER_STATE_INTENT_SYSTEM_PROMPT,
+    GET_CUSTOMER_NAME_SYSTEM_PROMPT,
     VERIFY_FOOD_ORDER_STATE_SYSTEM_PROMPT,
     VERIFY_MODIFIER_STATE_SYSTEM_PROMPT,
     VERIFY_STATE_SYSTEM_PROMPT,
@@ -230,6 +232,34 @@ async def verify_food_order_state(
         return FoodOrderStateVerification(**json.loads(response.choices[0].message.content))
     except Exception as e:
         raise AIServiceError(f"Failed to parse food order state verification: {e}") from e
+
+
+async def get_customer_name(
+    message_history: list[Message] | None,
+    latest_message: str,
+) -> CustomerNameAnalysis:
+    history = [m.model_dump() for m in (message_history or [])[-10:]]
+    messages: list[dict] = [
+        {"role": "system", "content": GET_CUSTOMER_NAME_SYSTEM_PROMPT},
+        *history,
+        {"role": "user", "content": latest_message},
+    ]
+
+    try:
+        response = await _client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=80,
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+    except OpenAIError as e:
+        raise AIServiceError(f"OpenAI request failed: {e}") from e
+
+    try:
+        return CustomerNameAnalysis(**json.loads(response.choices[0].message.content))
+    except Exception as e:
+        raise AIServiceError(f"Failed to parse customer name analysis: {e}") from e
 
 
 async def analyze_modifier_journey_intent(
