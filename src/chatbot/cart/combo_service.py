@@ -3,7 +3,9 @@ from src.chatbot.schema import ChatbotResponse
 
 async def detect_and_attach_combo(order_items: list[dict], response: ChatbotResponse) -> ChatbotResponse:
     best_combo = await _find_best_matching_combo(order_items)
-    return await _apply_combo(response, best_combo)
+    previous_combo = (response.order_state or {}).get("combo")
+    is_new_combo = previous_combo is None or previous_combo.get("original name") != (best_combo or {}).get("original name")
+    return await _apply_combo(response, best_combo, is_new_combo)
 
 
 async def _find_best_matching_combo(order_items: list[dict]) -> dict | None:
@@ -62,17 +64,20 @@ async def _parse_combo_key(combo_key: str) -> list[tuple[int, str]]:
     return parts
 
 
-async def _apply_combo(response: ChatbotResponse, combo: dict | None) -> ChatbotResponse:
+async def _apply_combo(response: ChatbotResponse, combo: dict | None, is_new_combo: bool) -> ChatbotResponse:
     if combo is not None:
-        return await _attach_combo(response, combo)
+        return await _attach_combo(response, combo, is_new_combo)
     return await _remove_combo(response)
 
 
-async def _attach_combo(response: ChatbotResponse, combo: dict) -> ChatbotResponse:
+async def _attach_combo(response: ChatbotResponse, combo: dict, is_new_combo: bool) -> ChatbotResponse:
     updated_order_state = {**(response.order_state or {}), "combo": combo}
+    message = response.chatbot_message
+    if is_new_combo:
+        message += await _build_combo_acknowledgement(combo)
     return response.model_copy(update={
         "order_state": updated_order_state,
-        "chatbot_message": response.chatbot_message + await _build_combo_acknowledgement(combo),
+        "chatbot_message": message,
     })
 
 

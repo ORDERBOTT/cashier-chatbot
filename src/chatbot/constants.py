@@ -11,6 +11,7 @@ class ConversationState(str, Enum):
     MISC = "misc"
     HUMAN_ESCALATION = "human_escalation"
     ORDER_COMPLETE = "order_complete"
+    ORDER_REVIEW = "order_review"
 
 class FoodOrderState(str, Enum):
     NEW_ORDER = "new_order"
@@ -19,7 +20,6 @@ class FoodOrderState(str, Enum):
     SWAP_ITEM = "swap_item"
     CANCEL_ORDER = "cancel_order"
     ADDING_MODIFIERS = "adding_modifiers"
-    REVIEW_ORDER = "review_order"
     ORDER_MODIFIER_REQUEST = "order_modifier_request"
 
 

@@ -13,6 +13,7 @@ VALID_TRANSITIONS: dict[ConversationState | None, set[ConversationState]] = {
         ConversationState.MISC,
         ConversationState.FAREWELL,
         ConversationState.PICKUP_PING,
+        ConversationState.ORDER_REVIEW,
     },
     ConversationState.FAREWELL: {
         ConversationState.GREETING,
@@ -33,6 +34,7 @@ VALID_TRANSITIONS: dict[ConversationState | None, set[ConversationState]] = {
         ConversationState.VAGUE_MESSAGE,
         ConversationState.MISC,
         ConversationState.ORDER_COMPLETE,
+        ConversationState.ORDER_REVIEW,
     },
     ConversationState.MENU_QUESTION: {
         ConversationState.MENU_QUESTION,
@@ -42,6 +44,7 @@ VALID_TRANSITIONS: dict[ConversationState | None, set[ConversationState]] = {
         ConversationState.VAGUE_MESSAGE,
         ConversationState.MISC,
         ConversationState.PICKUP_PING,
+        ConversationState.ORDER_REVIEW,
     },
     ConversationState.RESTAURANT_QUESTION: {
         ConversationState.RESTAURANT_QUESTION,
@@ -51,6 +54,7 @@ VALID_TRANSITIONS: dict[ConversationState | None, set[ConversationState]] = {
         ConversationState.VAGUE_MESSAGE,
         ConversationState.MISC,
         ConversationState.PICKUP_PING,
+        ConversationState.ORDER_REVIEW,
     },
     ConversationState.PICKUP_PING: {
         ConversationState.FOOD_ORDER,
@@ -61,6 +65,7 @@ VALID_TRANSITIONS: dict[ConversationState | None, set[ConversationState]] = {
         ConversationState.MENU_QUESTION,
         ConversationState.RESTAURANT_QUESTION,
         ConversationState.ORDER_COMPLETE,
+        ConversationState.ORDER_REVIEW,
     },
     ConversationState.VAGUE_MESSAGE: _ALL_STATES - {ConversationState.GREETING},
     ConversationState.MISC: _ALL_STATES - {ConversationState.GREETING},
@@ -73,17 +78,18 @@ VALID_TRANSITIONS: dict[ConversationState | None, set[ConversationState]] = {
         ConversationState.RESTAURANT_QUESTION,
         ConversationState.MENU_QUESTION,
         ConversationState.PICKUP_PING,
+        ConversationState.ORDER_REVIEW,
     },
+    ConversationState.ORDER_REVIEW: _ALL_STATES - {ConversationState.GREETING},
 }
 
 VALID_FOOD_ORDER_TRANSITIONS: dict[FoodOrderState | None, set[FoodOrderState]] = {
     None: _ALL_FOOD_STATES,
     FoodOrderState.NEW_ORDER: _ALL_FOOD_STATES,
     FoodOrderState.ADD_TO_ORDER: _ALL_FOOD_STATES,
-FoodOrderState.REMOVE_FROM_ORDER: _ALL_FOOD_STATES,
+    FoodOrderState.REMOVE_FROM_ORDER: _ALL_FOOD_STATES,
     FoodOrderState.SWAP_ITEM: _ALL_FOOD_STATES,
     FoodOrderState.CANCEL_ORDER: {FoodOrderState.NEW_ORDER},
     FoodOrderState.ADDING_MODIFIERS: _ALL_FOOD_STATES,
-    FoodOrderState.REVIEW_ORDER: _ALL_FOOD_STATES,
     FoodOrderState.ORDER_MODIFIER_REQUEST: _ALL_FOOD_STATES,
 }

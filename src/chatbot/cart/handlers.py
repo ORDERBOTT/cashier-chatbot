@@ -23,7 +23,7 @@ from src.chatbot.cart.item_detection_service import validate_order_items
 from src.chatbot.cart.utils import extract_items, merge_modifier_items
 
 # Menu utilities
-from src.menu.loader import get_item_price, get_menu_item_names
+from src.menu.loader import get_menu_item_names
 
 
 def _append_not_found_menu_messages(messages: list[str], not_found: list[_MatchResult]) -> None:
@@ -46,7 +46,6 @@ class OrderStateHandler:
             FoodOrderState.REMOVE_FROM_ORDER: self._handle_remove_from_order,
             FoodOrderState.SWAP_ITEM: self._handle_swap_item,
             FoodOrderState.CANCEL_ORDER: self._handle_cancel_order,
-            FoodOrderState.REVIEW_ORDER: self._handle_review_order,
             FoodOrderState.ORDER_MODIFIER_REQUEST: self._handle_order_modifier_request,
         }
 
@@ -226,44 +225,6 @@ class OrderStateHandler:
             message_history=request.message_history,
         )
         return ChatbotResponse(chatbot_message=reply, order_state=request.order_state)
-
-    async def _handle_review_order(self, request: BotInteractionRequest) -> ChatbotResponse:
-        items = (request.order_state or {}).get("items", [])
-        if not items:
-            return ChatbotResponse(
-                chatbot_message="Your order is empty. What would you like to order?",
-                order_state=request.order_state,
-            )
-
-        lines: list[str] = []
-        total = 0.0
-        for item in items:
-            name = item.get("name", "Unknown item")
-            quantity = item.get("quantity", 1)
-            modifier = item.get("modifier")
-            price = await get_item_price(name)
-
-            label = name
-            if modifier:
-                label += f" [{modifier}]"
-
-            qty_prefix = f"{quantity}x " if quantity > 1 else ""
-            if price is not None:
-                line_total = price * quantity
-                total += line_total
-                price_str = f"(${price:.2f} each)" if quantity > 1 else f"(${price:.2f})"
-                lines.append(f"- {qty_prefix}{label} {price_str} = ${line_total:.2f}")
-            else:
-                lines.append(f"- {qty_prefix}{label}")
-
-        items_text = "\n".join(lines)
-        total_line = f"\n\nRunning total: ${total:.2f}" if total > 0 else ""
-        message = f"Here's what you have so far:\n{items_text}{total_line}"
-
-        return ChatbotResponse(
-            chatbot_message=message,
-            order_state=request.order_state,
-        )
 
 
 class ModifierStateHandler:

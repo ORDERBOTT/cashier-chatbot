@@ -5,7 +5,7 @@ from src.chatbot.exceptions import UnhandledStateError
 from src.chatbot.schema import BotInteractionRequest, ChatbotResponse
 
 from src.chatbot.visibility import ai_client as visibility_ai
-from src.menu.loader import get_menu_context
+from src.menu.loader import get_menu_context, get_item_price
 from src.chatbot.visibility.constants import (
     RESTAURANT_NAME_LOCATION_KEY,
     RESTAURANT_NAME_LOCATION_FALLBACK,
@@ -29,6 +29,7 @@ class StateHandlerFactory:
             ConversationState.MISC: self._handle_misc,
             ConversationState.HUMAN_ESCALATION: self._handle_human_escalation,
             ConversationState.ORDER_COMPLETE: self._handle_order_complete,
+            ConversationState.ORDER_REVIEW: self._handle_order_review,
         }
 
     async def respond_to_message(self, state: ConversationState, request: BotInteractionRequest) -> ChatbotResponse:
@@ -137,6 +138,44 @@ class StateHandlerFactory:
             message_history=request.message_history,
         )
         return ChatbotResponse(chatbot_message=message, order_state=request.order_state)
+
+    async def _handle_order_review(self, request: BotInteractionRequest) -> ChatbotResponse:
+        items = (request.order_state or {}).get("items", [])
+        if not items:
+            return ChatbotResponse(
+                chatbot_message="Your order is empty. What would you like to order?",
+                order_state=request.order_state,
+            )
+
+        lines: list[str] = []
+        total = 0.0
+        for item in items:
+            name = item.get("name", "Unknown item")
+            quantity = item.get("quantity", 1)
+            modifier = item.get("modifier")
+            price = await get_item_price(name)
+
+            label = name
+            if modifier:
+                label += f" [{modifier}]"
+
+            qty_prefix = f"{quantity}x " if quantity > 1 else ""
+            if price is not None:
+                line_total = price * quantity
+                total += line_total
+                price_str = f"(${price:.2f} each)" if quantity > 1 else f"(${price:.2f})"
+                lines.append(f"- {qty_prefix}{label} {price_str} = ${line_total:.2f}")
+            else:
+                lines.append(f"- {qty_prefix}{label}")
+
+        items_text = "\n".join(lines)
+        total_line = f"\n\nRunning total: ${total:.2f}" if total > 0 else ""
+        message = f"Here's what you have so far:\n{items_text}{total_line}"
+
+        return ChatbotResponse(
+            chatbot_message=message,
+            order_state=request.order_state,
+        )
 
     async def _handle_order_complete(self, request: BotInteractionRequest) -> ChatbotResponse:
         items = await _get_items(request)

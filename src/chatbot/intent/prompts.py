@@ -128,8 +128,7 @@ Always check the `Current order` before selecting a state:
 - remove_from_order — The user wants to remove one or more specific items from their order.
 - swap_item         — The user wants to remove any item AND add any different item in a single action (e.g. "swap the chicken burger for a beef burger, remove 2 spicy tenders add 1 plain burger"). Both the old and new item must be clear.
 - cancel_order      — The user wants to cancel the entire order.
-- review_order      — The user wants to hear back what is currently in their order or what their running total is (e.g. "what do I have so far?", "read back my order", "what's in my cart?", "how much is this?", "what's my total?").
-- order_modifier_request — The user wants to add, remove, or swap a modifier on an base item the user has already ordered and confirmed. 
+- order_modifier_request — The user wants to add, remove, or swap a modifier on an base item the user has already ordered and confirmed.
 
 ## Mixed intent principle
 
@@ -142,8 +141,7 @@ Whenever the message contains **any** combination of ordering a new item AND mod
 3. cancel_order is only when the user wants to scrap the entire order, not just one item. Require high confidence for cancel_order — a short ambiguous "cancel" should not trigger it.
 4. Use the message history, current order state, and previous sub-state as context.
 5. If a message could belong to two states, put the secondary one in "alternative".
-6. review_order applies when the user is asking what they have ordered or asking for a total — not when placing or changing an order.
-7. order_modifier_request ONLY when ALL three conditions hold: (a) `Current order` is non-empty, (b) the target item is present in `Current order`, AND (c) no new items are mentioned anywhere in the message — the message is solely about modifying an already-confirmed item. Example: "make it spicy", "remove the sauce", "change to mild". If any condition fails, use an item-level state instead.
+6. order_modifier_request ONLY when ALL three conditions hold: (a) `Current order` is non-empty, (b) the target item is present in `Current order`, AND (c) no new items are mentioned anywhere in the message — the message is solely about modifying an already-confirmed item. Example: "make it spicy", "remove the sauce", "change to mild". If any condition fails, use an item-level state instead.
 8. For "remove" phrasing, distinguish item removal vs modifier removal:
    - remove_from_order when the user clearly wants fewer physical units/items in the cart.
    - order_modifier_request when user wants to remove/change an attribute/modifier (spicy, sauce, cheese, etc.) on the base item and no new item is mentioned.
@@ -225,8 +223,9 @@ Classify the user's latest message into exactly one state. Use conversation hist
 - farewell           — User is clearly signing off ("bye", "goodbye", "cheers", "see you").
 - vague_message      — Intent is genuinely unclear even in context ("hmm", "maybe"). Not for off-topic messages with clear intent.
 - restaurant_question — Questions about the restaurant itself: hours, location, parking, seating, reservations, policies, contact.
-- menu_question      — Questions about the menu: dishes, ingredients, allergens, dietary options, pricing, available customizations.
-- food_order         — Cart-level actions: adding/removing whole items, changing quantities, canceling the order, reviewing cart/total, adding modifiers, to existing items.
+- menu_question      — Questions about the menu: dishes, drinks, beverages, ingredients, allergens, dietary options, pricing, available customizations.
+- food_order         — Cart-level actions: adding/removing whole items, changing quantities, canceling the order, adding modifiers to existing items.
+- order_review       — User is asking what's currently in their cart or what their running total is ("what do I have so far?", "read back my order", "what's my total?", "how much is this?").
 - pickup_ping        — Time-related queries: when food will be ready, wait times, order status, ETA.
 - misc               — Clear intent unrelated to the restaurant (weather, sports, compliments, general chat).
 - human_escalation   — User wants to speak to a human, staff member, or cashier.
@@ -238,7 +237,8 @@ Classify the user's latest message into exactly one state. Use conversation hist
 2. **farewell vs order_complete**: "that's all / done / nothing else / we're good" with an active order → order_complete. Explicit sign-offs ("bye", "goodbye") with no order context → farewell. If they say "yes" but also mention a new item → food_order.
 3. **vague_message vs misc**: Genuinely unclear meaning → vague_message. Understood but off-topic → misc.
 4. Short option picks ("medium", "spicy", "no sauce", "the combo") after a modifier prompt → food_order, not vague_message.
-5. If multiple states apply, choose the dominant intent; put the secondary in "alternative".
+5. **Drinks / beverages:** If the user asks for a drink in **general** (no specific product named) — e.g. "I want a drink", "get me a soda", "something to drink" — or asks **what** you have to drink / available beverages, classify as **menu_question**, not **food_order**. When they order or name a **specific** drink (e.g. "Coke", "a Sprite", "large lemonade", "add a Diet Pepsi"), classify as **food_order**. Mixed food + named drink in one utterance → **food_order**.
+6. If multiple states apply, choose the dominant intent; put the secondary in "alternative".
 
 ## Confidence
 
@@ -259,8 +259,12 @@ Classify the user's latest message into exactly one state. Use conversation hist
 "spicy" (bot asked spice level) → food_order
 "large please" (bot asked size) → food_order
 "no combo" / "plain fries" → food_order
-"add a Sprite" / "remove the fries" → food_order
+"I want a drink" / "get me a soda" / "what do you have to drink?" / "what sodas do you have?" → menu_question
+"add a Sprite" / "I'll take a Coke" / "can I get a large lemonade" → food_order
+"remove the fries" → food_order
+"a burger, fries, and a Coke" → food_order
 "what's on the deluxe burger?" → menu_question
+"what do I have?" / "what's my total?" / "read back my order" → order_review
 
 ## Output format
 
@@ -286,7 +290,7 @@ You will receive:
 1. If the proposed state is reasonable, confirm it (confirmed: true).
 2. Only provide a corrected_state if you are confident the proposed state is WRONG.
 3. When unsure, confirm rather than guess. The code falls back to add_to_order if needed.
-4. Never invent a state not in this list: add_to_order, remove_from_order, swap_item, cancel_order, review_order, order_modifier_request.
+4. Never invent a state not in this list: add_to_order, remove_from_order, swap_item, cancel_order, order_modifier_request.
 5. If the proposed state is remove_from_order but the current order is empty, that is wrong — correct it.
 6. If the proposed state is order_modifier_request but the **base item** is only **implied** (e.g. guessed from a sauce/modifier pairing like tartar–fish, or several cart lines could match with no explicit name), reject it — set confirmed: false and corrected_state to the more appropriate state (usually add_to_order).
 
@@ -312,7 +316,7 @@ You will receive:
 1. If the proposed state is reasonable given the message and context, confirm it (confirmed: true).
 2. Only provide a corrected_state if you are confident the proposed state is WRONG — not just uncertain.
 3. When unsure, confirm rather than guess a correction. The code layer will fall back to vague_message if needed.
-4. Never invent a state not in this list: greeting, farewell, vague_message, restaurant_question, menu_question, food_order, pickup_ping, misc, human_escalation, order_complete.
+4. Never invent a state not in this list: greeting, farewell, vague_message, restaurant_question, menu_question, food_order, pickup_ping, misc, human_escalation, order_complete, order_review.
 5. An invalid transition (transition_valid: false) is a strong signal to reconsider, but not automatic grounds for rejection.
 
 ## Output format
