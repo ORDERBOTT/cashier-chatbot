@@ -10,7 +10,7 @@ from src.chatbot.schema import Message, OrderItem
 CONFIRMED_THRESHOLD = 70     # single top match at or above this → confirmed
 MODS_CONFIRMED_THRESHOLD = 80 # single top match at or above this → confirmed
 NOT_FOUND_THRESHOLD = 50     # match_free_modifier: top match below this → not on option list
-LOW_MENU_MATCH_THRESHOLD = 55  # match_item: below this → not on menu (no ambiguity / gap pass)
+LOW_MENU_MATCH_THRESHOLD = 65  # match_item: below this → not on menu (no ambiguity / gap pass)
 LOW_MENU_MATCH_MESSAGE = (
     "This item doesn't exist on our menu. Please refer to our menu for available options!"
 )
@@ -145,9 +145,15 @@ class FuzzyMatcher:
 
 
 def _combined_scorer(s1: str, s2: str, **kwargs: object) -> float:
+    # WRatio internally uses partial_token_set_ratio, which inflates scores for strings
+    # sharing short connector tokens ("n", "and", "with"). Build the composite manually,
+    # excluding both token-set variants, to avoid false positives on food names.
     s1p = utils.default_process(s1)
     s2p = utils.default_process(s2)
+    PARTIAL_SCALE = 0.9
     return max(
-        fuzz.WRatio(s1p, s2p, processor=None),
-        fuzz.token_set_ratio(s1p, s2p, processor=None),
+        fuzz.ratio(s1p, s2p, processor=None),
+        fuzz.partial_ratio(s1p, s2p, processor=None) * PARTIAL_SCALE,
+        fuzz.token_sort_ratio(s1p, s2p, processor=None),
+        fuzz.partial_token_sort_ratio(s1p, s2p, processor=None) * PARTIAL_SCALE,
     )
