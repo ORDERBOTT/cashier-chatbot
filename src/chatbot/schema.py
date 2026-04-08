@@ -1,7 +1,7 @@
 from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 from src.chatbot.utils import _parse_food_order_state, _parse_safely
-from src.chatbot.constants import ConversationState, FoodOrderState, ModifierJourneyState
+from src.chatbot.constants import ConversationState, FoodOrderState
 
 class Message(BaseModel):
     role: Literal["system", "user", "assistant"]
@@ -35,6 +35,10 @@ class SwapItems(BaseModel):
     add: list[OrderItem]
 
 
+class AddItemsResult(BaseModel):
+    new_items: list[OrderItem]
+
+
 _LONG_MESSAGE_THRESHOLD = 400  # chars; menu dumps are typically 300–800 chars
 
 
@@ -45,8 +49,6 @@ class BotInteractionRequest(BaseModel):
     order_state: dict | None = None
     previous_state: ConversationState | None = None
     previous_food_order_state: FoodOrderState | None = None
-    previous_modifier_journey_state: ModifierJourneyState | None = None
-    awaiting_order_confirmation: bool = False
     customer_name: str | None = None
 
     @field_validator("previous_state", mode="before")
@@ -60,11 +62,6 @@ class BotInteractionRequest(BaseModel):
         if v is None or isinstance(v, FoodOrderState):
             return v
         return _parse_food_order_state(str(v).strip())
-
-    @field_validator("previous_modifier_journey_state", mode="before")
-    @classmethod
-    def parse_previous_modifier_journey_state(cls, v):
-        return _parse_safely(v, ModifierJourneyState)
 
     @field_validator("message_history", mode="before")
     @classmethod
@@ -88,8 +85,6 @@ class ChatbotResponse(BaseModel):
     order_state: dict | None = None
     previous_state: str | None = None
     previous_food_order_state: str | None = None
-    previous_modifier_journey_state: str | None = None
-    awaiting_order_confirmation: bool = False
     customer_name: str | None = None
 
 

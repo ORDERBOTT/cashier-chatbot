@@ -34,18 +34,6 @@ class FoodOrderStateVerification(BaseModel):
     corrected_state: str | None = None
 
 
-class ModifierStateIntentAnalysis(BaseModel):
-    state: str
-    confidence: Literal["high", "medium", "low"]
-    reasoning: str
-    alternative: str | None = None
-
-
-class ModifierStateVerification(BaseModel):
-    confirmed: bool
-    corrected_state: str | None = None
-
-
 class OrderFinalizationIntent(BaseModel):
     intent: Literal["confirm", "modify", "unclear"]
 
@@ -62,6 +50,17 @@ class ModifierJourneyAnalysis(BaseModel):
     reasoning: str
 
 
+class ModifierOrderIntentAnalysis(BaseModel):
+    state: str
+    confidence: Literal["high", "medium", "low"]
+    reasoning: str
+    alternative: str | None = None
+
+
 class CustomerNameAnalysis(BaseModel):
     full_name: str | None = None
     confidence: Literal["high", "medium", "low"]
+
+
+class ModifierAssignmentResult(BaseModel):
+    items: list[dict]

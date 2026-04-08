@@ -7,7 +7,7 @@ def merge_items(existing_order_state: dict | None, new_items: list[dict]) -> lis
 
     def _key(item: dict) -> tuple:
         mods = item.get("selected_mods")
-        if isinstance(mods, dict):
+        if mods:
             mods_key = tuple(sorted(
                 (k, tuple(v) if isinstance(v, list) else v)
                 for k, v in mods.items()
@@ -86,13 +86,24 @@ class ClarificationBuilder:
             messages.append(f"Got it! I've added {names} to your order.")
 
         if not_found:
-            names = ", ".join(f'"{r.item.name}"' for r in not_found)
-            messages.append(f"Sorry, I couldn't find {names} on our menu. Could you double-check the name?")
+            custom = list(
+                dict.fromkeys(m for r in not_found if (m := r.clarification_message))
+            )
+            messages.extend(custom)
+            generic = [r for r in not_found if not r.clarification_message]
+            if generic:
+                names = ", ".join(f'"{r.item.name}"' for r in generic)
+                messages.append(
+                    f"Sorry, I couldn't find {names} on our menu. If you want to know what we provide please ask about our menu, or order something else. Thanks!"
+                )
 
         if ambiguous:
             for r in ambiguous:
-                options = ", ".join(f'"{c}"' for c in r.candidates)
-                messages.append(f'I found a few matches for "{r.item.name}" — did you mean {options}?')
+                if r.clarification_message:
+                    messages.append(r.clarification_message)
+                else:
+                    options = ", ".join(f'"{c}"' for c in r.candidates)
+                    messages.append(f'I found a few matches for "{r.item.name}" — did you mean {options}?')
 
         chatbot_message = " ".join(messages) if messages else "I didn't catch that — could you tell me what you'd like to order?"
         return ChatbotResponse(
@@ -126,13 +137,22 @@ class ClarificationBuilder:
                 messages.append(f"{names} wasn't in your order.")
 
         if not_found:
-            names = ", ".join(f'"{r.item.name}"' for r in not_found)
-            messages.append(f"Sorry, I couldn't find {names} on our menu.")
+            custom = list(
+                dict.fromkeys(m for r in not_found if (m := r.clarification_message))
+            )
+            messages.extend(custom)
+            generic = [r for r in not_found if not r.clarification_message]
+            if generic:
+                names = ", ".join(f'"{r.item.name}"' for r in generic)
+                messages.append(f"Sorry, I couldn't find {names} on our menu.")
 
         if ambiguous:
             for r in ambiguous:
-                options = ", ".join(f'"{c}"' for c in r.candidates)
-                messages.append(f'I found a few matches for "{r.item.name}" — did you mean {options}?')
+                if r.clarification_message:
+                    messages.append(r.clarification_message)
+                else:
+                    options = ", ".join(f'"{c}"' for c in r.candidates)
+                    messages.append(f'I found a few matches for "{r.item.name}" — did you mean {options}?')
 
         chatbot_message = " ".join(messages) if messages else "I didn't catch that — which item would you like to remove?"
         return ChatbotResponse(
