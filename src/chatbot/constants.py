@@ -8,6 +8,7 @@ class ConversationState(str, Enum):
     MENU_QUESTION = "menu_question"
     FOOD_ORDER = "food_order"
     PICKUP_PING = "pickup_ping"
+    PICKUP_TIME_SUGGESTION = "pickup_time_suggestion"
     MISC = "misc"
     HUMAN_ESCALATION = "human_escalation"
     ORDER_COMPLETE = "order_complete"

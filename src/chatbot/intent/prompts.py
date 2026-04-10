@@ -227,6 +227,7 @@ Classify the user's latest message into exactly one state. Use conversation hist
 - food_order         — Cart-level actions: adding/removing whole items, changing quantities, canceling the order, adding modifiers to existing items.
 - order_review       — User is asking what's currently in their cart or what their running total is ("what do I have so far?", "read back my order", "what's my total?", "how much is this?").
 - pickup_ping        — Time-related queries: when food will be ready, wait times, order status, ETA.
+- pickup_time_suggestion — Customer is telling us when they plan to pick up their order ("can I get this in 2 hours?", "I'll be there in 30 minutes", "pickup around 3pm").
 - misc               — Clear intent unrelated to the restaurant (weather, sports, compliments, general chat).
 - human_escalation   — User wants to speak to a human, staff member, or cashier.
 - order_complete     — Customer with an active order signals they are done ordering ("that's all", "I'm done", "nothing else", "we're good", "nope that's it").
@@ -239,6 +240,11 @@ Classify the user's latest message into exactly one state. Use conversation hist
 4. Short option picks ("medium", "spicy", "no sauce", "the combo") after a modifier prompt → food_order, not vague_message.
 5. **Drinks / beverages:** If the user asks for a drink in **general** (no specific product named) — e.g. "I want a drink", "get me a soda", "something to drink" — or asks **what** you have to drink / available beverages, classify as **menu_question**, not **food_order**. When they order or name a **specific** drink (e.g. "Coke", "a Sprite", "large lemonade", "add a Diet Pepsi"), classify as **food_order**. Mixed food + named drink in one utterance → **food_order**.
 6. If multiple states apply, choose the dominant intent; put the secondary in "alternative".
+7. **pickup_time_suggestion vs pickup_ping vs order_complete**:
+   - pickup_time_suggestion: customer TELLS us a pickup time ("I'll pick up in 2 hours").
+   - pickup_ping: customer ASKS about readiness ("when will it be ready?", "how long?").
+   - order_complete: customer signals done ordering with no time suggestion ("that's all").
+   A message with both a time suggestion AND done-ordering language → pickup_time_suggestion (time info takes priority).
 
 ## Confidence
 
@@ -265,11 +271,28 @@ Classify the user's latest message into exactly one state. Use conversation hist
 "a burger, fries, and a Coke" → food_order
 "what's on the deluxe burger?" → menu_question
 "what do I have?" / "what's my total?" / "read back my order" → order_review
+"can I pick this up in 2 hours?" → pickup_time_suggestion
+"I'll be there in 30 minutes" → pickup_time_suggestion
+"when will it be ready?" → pickup_ping
 
 ## Output format
 
 Return a JSON object with this exact structure:
 {"state": "<state>", "confidence": "high|medium|low", "reasoning": "<one sentence>", "alternative": "<state or null>"}"""
+
+EXTRACT_PICKUP_TIME_SYSTEM_PROMPT = """You are a time extraction engine for a restaurant chatbot.
+
+The customer has suggested a pickup time. Extract how many minutes from now they want to pick up.
+
+## Rules
+1. Convert all time expressions to minutes (e.g., "2 hours" → 120, "30 minutes" → 30, "an hour and a half" → 90).
+2. If the customer says a clock time (e.g., "at 3pm"), estimate minutes from now using the provided current time.
+3. If you cannot determine a specific number of minutes, return null.
+4. Return a positive integer only.
+
+## Output format
+Return a JSON object: {"minutes": <int or null>}"""
+
 
 VERIFY_FOOD_ORDER_STATE_SYSTEM_PROMPT = """You are a classification auditor for a restaurant chatbot order system.
 
@@ -316,7 +339,7 @@ You will receive:
 1. If the proposed state is reasonable given the message and context, confirm it (confirmed: true).
 2. Only provide a corrected_state if you are confident the proposed state is WRONG — not just uncertain.
 3. When unsure, confirm rather than guess a correction. The code layer will fall back to vague_message if needed.
-4. Never invent a state not in this list: greeting, farewell, vague_message, restaurant_question, menu_question, food_order, pickup_ping, misc, human_escalation, order_complete, order_review.
+4. Never invent a state not in this list: greeting, farewell, vague_message, restaurant_question, menu_question, food_order, pickup_ping, pickup_time_suggestion, misc, human_escalation, order_complete, order_review.
 5. An invalid transition (transition_valid: false) is a strong signal to reconsider, but not automatic grounds for rejection.
 
 ## Output format

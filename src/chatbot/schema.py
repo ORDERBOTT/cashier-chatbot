@@ -86,6 +86,8 @@ class ChatbotResponse(BaseModel):
     previous_state: str | None = None
     previous_food_order_state: str | None = None
     customer_name: str | None = None
+    pickup_time_suggestion: int | None = None
+    pickup_time_suggestion_timestamp: str | None = None
 
 
 class TestResultsSaveRequest(BaseModel):
