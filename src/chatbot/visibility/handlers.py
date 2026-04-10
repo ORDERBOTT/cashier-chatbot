@@ -45,7 +45,7 @@ class StateHandlerFactory:
         message = await self._build_welcome_message(restaurant_info)
 
         return ChatbotResponse(
-            chatbot_message=message,
+            chatbot_message="Smash n Wings, This is our store: 3717 Monroe street, Dearborn, Ml 48124. Please text your order including a name and confirm the given pick up time. Thank you.",
             order_state=request.order_state,
         )
     
