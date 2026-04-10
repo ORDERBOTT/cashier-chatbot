@@ -18,6 +18,7 @@ from src.chatbot.intent.prompts import (
     ANALYZE_INTENT_SYSTEM_PROMPT,
     ANALYZE_MODIFIER_JOURNEY_INTENT_SYSTEM_PROMPT,
     ANALYZE_MODIFIER_ORDER_STATE_SYSTEM_PROMPT,
+    EXTRACT_PICKUP_TIME_SYSTEM_PROMPT,
     GET_CUSTOMER_NAME_SYSTEM_PROMPT,
     VERIFY_FOOD_ORDER_STATE_SYSTEM_PROMPT,
     VERIFY_STATE_SYSTEM_PROMPT,
@@ -198,6 +199,35 @@ async def get_customer_name(
         return CustomerNameAnalysis(**json.loads(response.choices[0].message.content))
     except Exception as e:
         raise AIServiceError(f"Failed to parse customer name analysis: {e}") from e
+
+
+async def extract_pickup_time_minutes(
+    latest_message: str,
+    message_history: list[Message] | None = None,
+) -> int | None:
+    history = openai_chat_history_from_messages(message_history, tail=5)
+    messages: list[dict] = [
+        {"role": "system", "content": EXTRACT_PICKUP_TIME_SYSTEM_PROMPT},
+        *history,
+        {"role": "user", "content": latest_message},
+    ]
+
+    try:
+        response = await _client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=50,
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+    except OpenAIError as e:
+        raise AIServiceError(f"OpenAI request failed: {e}") from e
+
+    try:
+        raw = json.loads(response.choices[0].message.content)
+        return raw.get("minutes")
+    except Exception as e:
+        raise AIServiceError(f"Failed to parse pickup time extraction: {e}") from e
 
 
 async def analyze_modifier_order_state(

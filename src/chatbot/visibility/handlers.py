@@ -26,6 +26,7 @@ class StateHandlerFactory:
             ConversationState.MENU_QUESTION: self._handle_menu_question,
             ConversationState.FOOD_ORDER: self._handle_food_order,
             ConversationState.PICKUP_PING: self._handle_pickup_ping,
+            ConversationState.PICKUP_TIME_SUGGESTION: self._handle_pickup_time_suggestion,
             ConversationState.MISC: self._handle_misc,
             ConversationState.HUMAN_ESCALATION: self._handle_human_escalation,
             ConversationState.ORDER_COMPLETE: self._handle_order_complete,
@@ -44,7 +45,7 @@ class StateHandlerFactory:
         message = await self._build_welcome_message(restaurant_info)
 
         return ChatbotResponse(
-            chatbot_message=message,
+            chatbot_message="Smash n Wings, This is our store: 3717 Monroe street, Dearborn, Ml 48124. Please text your order including a name and confirm the given pick up time. Thank you.",
             order_state=request.order_state,
         )
     
@@ -124,6 +125,25 @@ class StateHandlerFactory:
 
     async def _handle_pickup_ping(self, request: BotInteractionRequest) -> ChatbotResponse:
         return ChatbotResponse(chatbot_message="", pickup_ping=True, order_state=request.order_state)
+
+    async def _handle_pickup_time_suggestion(self, request: BotInteractionRequest) -> ChatbotResponse:
+        from datetime import datetime, timezone
+        from src.chatbot.intent.ai_client import extract_pickup_time_minutes
+
+        minutes = await extract_pickup_time_minutes(
+            latest_message=request.latest_message,
+            message_history=request.message_history,
+        )
+        timestamp = datetime.now(timezone.utc).isoformat()
+        print("minutes", minutes)
+        print("timestamp", timestamp)
+
+        return ChatbotResponse(
+            chatbot_message="Of course! We'll let you know when it's ready.",
+            order_state=request.order_state,
+            pickup_time_suggestion=minutes,
+            pickup_time_suggestion_timestamp=timestamp,
+        )
 
     async def _handle_human_escalation(self, request: BotInteractionRequest) -> ChatbotResponse:
         return ChatbotResponse(
