@@ -23,7 +23,40 @@ from src.chatbot.cart.item_detection_service import validate_order_items
 from src.chatbot.cart.utils import extract_items, merge_modifier_items
 
 # Menu utilities
-from src.menu.loader import get_menu_item_names
+from src.menu.loader import get_menu_item_names, get_item_id, get_item_definition, resolve_mod_ids, resolve_mod_ids_from_string
+
+
+async def _enrich_items_with_resolved_mods(items: list[dict]) -> list[dict]:
+    enriched = []
+    for item in items:
+        item = dict(item)
+        if not item.get("item_id"):
+            item["item_id"] = get_item_id(item.get("name", ""))
+        selected_mods = item.get("selected_mods")
+        modifier_str = item.get("modifier") or ""
+        if selected_mods:
+            item["resolved_mods"] = resolve_mod_ids(item.get("name", ""), selected_mods)
+        elif modifier_str.strip():
+            item["resolved_mods"] = resolve_mod_ids_from_string(item.get("name", ""), modifier_str)
+        enriched.append(item)
+    return enriched
+
+
+async def _enrich_order_state_with_prices(order_state: dict) -> dict:
+    items = order_state.get("items", [])
+    enriched = []
+    order_total = 0
+    for item in items:
+        item = dict(item)
+        definition = get_item_definition(item.get("name", ""))
+        unit_price = definition.get("price") if definition else None
+        if unit_price is not None:
+            qty = item.get("quantity", 1)
+            item["unit_price"] = unit_price
+            item["item_total"] = unit_price * qty
+            order_total += item["item_total"]
+        enriched.append(item)
+    return {**order_state, "items": enriched, "order_total": order_total}
 
 
 def _append_not_found_menu_messages(messages: list[str], not_found: list[_MatchResult]) -> None:
@@ -64,6 +97,9 @@ class OrderStateHandler:
             raise UnhandledStateError(f"No handler registered for food order state: '{food_order_state}'")
         response = await handler(request)
         response.previous_food_order_state = food_order_state.value
+        if response.order_state:
+            enriched = await _enrich_order_state_with_prices(response.order_state)
+            response = response.model_copy(update={"order_state": enriched})
         return response
 
     async def _handle_new_order(self, request: BotInteractionRequest) -> ChatbotResponse:
@@ -191,7 +227,10 @@ class OrderStateHandler:
         valid_adds, incomplete_adds, add_extra_msgs = await self._validate_and_partition_confirmed(add_results)
         confirmed_additions = valid_adds + incomplete_adds
         if confirmed_additions:
-            new_items = [{**r.item.model_dump(), "name": r.canonical_name} for r in confirmed_additions]
+            new_items = [
+                {**r.item.model_dump(), "name": r.canonical_name, "item_id": get_item_id(r.canonical_name)}
+                for r in confirmed_additions
+            ]
             merged = merge_items(order_state, new_items)
             order_state = {"items": merged}
             names = ", ".join(f"{r.item.quantity}x {r.canonical_name}" for r in confirmed_additions)
@@ -251,7 +290,11 @@ class ModifierStateHandler:
         handler = self._handlers.get(modifier_state)
         if handler is None:
             raise UnhandledStateError(f"No handler registered for modifier order state: '{modifier_state}'")
-        return await handler(request, food_response)
+        response = await handler(request, food_response)
+        if response.order_state:
+            enriched = await _enrich_order_state_with_prices(response.order_state)
+            response = response.model_copy(update={"order_state": enriched})
+        return response
 
     async def _handle_new_modifier(self, request: BotInteractionRequest, food_response: ChatbotResponse | None = None) -> ChatbotResponse:
         items = await extract_items(request)
@@ -329,4 +372,10 @@ class ModifierStateHandler:
         items = order_state.get("items", [])
         response = await detect_and_attach_combo(items, response)
         response = await validate_order_items(items, response)
+        enriched_items = await _enrich_items_with_resolved_mods(
+            (response.order_state or {}).get("items", [])
+        )
+        response = response.model_copy(
+            update={"order_state": {**(response.order_state or {}), "items": enriched_items}}
+        )
         return response

@@ -19,6 +19,8 @@ class OrderItem(BaseModel):
     quantity: int
     modifier: str | None = None
     selected_mods: dict[str, str | list[str]] | None = None
+    item_id: str | None = None
+    resolved_mods: list[dict] | None = None
 
 
 class ModifyItem(BaseModel):

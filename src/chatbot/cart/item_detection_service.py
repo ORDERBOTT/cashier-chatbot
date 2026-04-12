@@ -1,7 +1,6 @@
 from rapidfuzz import process
 
-from src.menu.loader import _MENU_DATA
-from src.menu.loader import get_item_category
+from src.menu.loader import get_item_category, get_item_definition
 from src.chatbot.schema import ChatbotResponse
 from src.chatbot.clarification.fuzzy_matcher import _combined_scorer, CONFIRMED_THRESHOLD, MODS_CONFIRMED_THRESHOLD
 
@@ -15,7 +14,7 @@ _WINGS_QUANTITY_FLAVORS = {6: 1, 12: 2, 18: 3, 24: 4, 30: 5}
 async def validate_order_items(order_items: list[dict], response: ChatbotResponse) -> ChatbotResponse:
     for item in order_items:
         name = item.get("name", "")
-        if name in _MENU_DATA.get("menu", {}).get("items", {}).keys():
+        if get_item_definition(name) is not None:
             response = await detect_non_default_items(item, name, response)
             response = await detect_mods_allowed(item, name, response)
         else:
@@ -28,16 +27,13 @@ async def detect_mods_allowed(order_items: dict, item_name: str, response: Chatb
     return response
 
 async def validate_mod_selections(item_name: str, users_mods: list[str], order_item: dict, response: ChatbotResponse) -> ChatbotResponse:
-    item_data = _MENU_DATA.get("menu", {}).get("items", {}).get(item_name, {})
+    item_data = get_item_definition(item_name) or {}
     allowed_names: list[str] = []
-    for mod in item_data.get("mods", {}).values():
-        for opt in mod.get("options", []):
-            if isinstance(opt, dict):
-                n = opt.get("name")
-                if n:
-                    allowed_names.append(str(n))
-            elif isinstance(opt, str):
-                allowed_names.append(opt)
+    for group in item_data.get("modifier_groups", []):
+        for mod in group.get("modifiers", []):
+            n = mod.get("name")
+            if n:
+                allowed_names.append(str(n))
     print(f"allowed_names: {allowed_names}")
     if not allowed_names:
         return response
@@ -98,7 +94,7 @@ async def detect_non_default_items(ordered_item: dict, item_name: str, response:
                         f"You selected {flavor_count}. Please reduce your selection."
                     )
     return response
-    
+
 
 async def _max_wings_flavors(quantity: int) -> int | None:
     return _WINGS_QUANTITY_FLAVORS.get(quantity)

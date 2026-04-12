@@ -1,22 +1,20 @@
-from src.menu.loader import _MENU_DATA
+from src.menu.loader import _combos, _items_by_name
 from src.chatbot.schema import ChatbotResponse
 
 async def detect_and_attach_combo(order_items: list[dict], response: ChatbotResponse) -> ChatbotResponse:
     best_combo = await _find_best_matching_combo(order_items)
     previous_combo = (response.order_state or {}).get("combo")
-    is_new_combo = previous_combo is None or previous_combo.get("original name") != (best_combo or {}).get("original name")
+    is_new_combo = previous_combo is None or previous_combo.get("name") != (best_combo or {}).get("name")
     return await _apply_combo(response, best_combo, is_new_combo)
 
 
 async def _find_best_matching_combo(order_items: list[dict]) -> dict | None:
-    combos: dict = _MENU_DATA.get("menu", {}).get("combos", {})
-    canonical_names: set[str] = set(_MENU_DATA.get("menu", {}).get("items", {}).keys())
     order_counts = await _build_order_counts(order_items)
 
     matched = [
-        combo_info
-        for combo_key, combo_info in combos.items()
-        if await _combo_matches_order(combo_key, order_counts, canonical_names)
+        combo
+        for combo in _combos
+        if await _combo_matches_order(combo, order_counts)
     ]
     if not matched:
         return None
@@ -33,35 +31,22 @@ async def _build_order_counts(order_items: list[dict]) -> dict[str, int]:
     return counts
 
 
-async def _combo_matches_order(combo_key: str, order_counts: dict[str, int], canonical_names: set[str]) -> bool:
-    combo_items = await _parse_combo_key(combo_key)
-    if not combo_items:
-        return False
-    for qty, name in combo_items:
-        canonical = await _resolve_canonical_name(name, canonical_names)
-        if canonical is None or order_counts.get(canonical, 0) < qty:
+async def _combo_matches_order(combo: dict, order_counts: dict[str, int]) -> bool:
+    for combo_item in combo.get("items", []):
+        name = combo_item.get("item_name", "").lower()
+        quantity = combo_item.get("quantity", 1)
+        canonical = await _resolve_canonical_name(name)
+        if canonical is None or order_counts.get(canonical, 0) < quantity:
             return False
     return True
 
 
-async def _resolve_canonical_name(name: str, canonical_names: set[str]) -> str | None:
-    if name in canonical_names:
+async def _resolve_canonical_name(name: str) -> str | None:
+    if name in _items_by_name:
         return name
-    if name.endswith("s") and name[:-1] in canonical_names:
+    if name.endswith("s") and name[:-1] in _items_by_name:
         return name[:-1]
     return None
-
-
-async def _parse_combo_key(combo_key: str) -> list[tuple[int, str]]:
-    parts: list[tuple[int, str]] = []
-    for segment in combo_key.split(","):
-        tokens = segment.strip().split(" ", 1)
-        if len(tokens) == 2:
-            try:
-                parts.append((int(tokens[0]), tokens[1].strip().lower()))
-            except ValueError:
-                pass
-    return parts
 
 
 async def _apply_combo(response: ChatbotResponse, combo: dict | None, is_new_combo: bool) -> ChatbotResponse:
@@ -90,4 +75,5 @@ async def _remove_combo(response: ChatbotResponse) -> ChatbotResponse:
 
 
 async def _build_combo_acknowledgement(combo: dict) -> str:
-    return f"\n\nBy the way, that's our {combo['original name']} combo deal at ${combo['price']:.2f}!"
+    price = combo.get("price", 0)
+    return f"\n\nBy the way, that's our {combo['name']} combo deal at ${price / 100:.2f}!"
