@@ -9,6 +9,9 @@ firebaseDatabase: AsyncClient | None = None
 
 async def init_firebase() -> None:
     global firebaseDatabase
+    if not settings.FIREBASE_PROJECT_ID or not settings.FIREBASE_PRIVATE_KEY:
+        print("Firebase credentials not set — skipping Firebase init")
+        return
     cred = credentials.Certificate({
         "type": "service_account",
         "project_id": settings.FIREBASE_PROJECT_ID,

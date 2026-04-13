@@ -427,8 +427,8 @@
       40%           { transform: translateY(-6px); }
     }
 
-    /* ── Test runner button ─────────────────────────────────────── */
-    #run-tests-btn {
+    /* ── Test runner buttons ────────────────────────────────────── */
+    .header-btn {
       background: rgba(255,255,255,0.15);
       color: #fff;
       border: 1px solid rgba(255,255,255,0.25);
@@ -438,10 +438,52 @@
       cursor: pointer;
       font-weight: 500;
       transition: background 0.15s;
-      margin-right: 8px;
+      margin-right: 6px;
     }
-    #run-tests-btn:hover:not(:disabled) { background: #27ae60; border-color: #27ae60; }
-    #run-tests-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .header-btn:hover:not(:disabled) { background: #27ae60; border-color: #27ae60; }
+    .header-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    #real-convo-btn { border-color: #e67e22; }
+    #real-convo-btn:hover:not(:disabled) { background: #e67e22; border-color: #e67e22; }
+
+    /* ── Validation results ─────────────────────────────────────── */
+    .results-banner {
+      margin: 10px 20px;
+      padding: 14px 18px;
+      border-radius: 10px;
+      background: #f5f5f5;
+      font-size: 13px;
+      line-height: 1.6;
+      border-left: 4px solid #ccc;
+    }
+    .results-banner.pass { border-left-color: #2e7d32; background: #e8f5e9; }
+    .results-banner.fail { border-left-color: #c62828; background: #ffebee; }
+    .results-banner table { font-size: 13px; }
+
+    /* ── Test progress panel ────────────────────────────────────── */
+    #test-progress {
+      display: none;
+      padding: 12px 20px 0;
+    }
+    #test-progress.active { display: block; }
+    .test-convo-card {
+      padding: 8px 12px;
+      margin-bottom: 6px;
+      border-radius: 8px;
+      background: #f0f0f0;
+      font-size: 13px;
+    }
+    .test-convo-card.running { background: #fff3e0; border-left: 3px solid #ff9800; }
+    .test-convo-card.done-pass { background: #e8f5e9; border-left: 3px solid #2e7d32; }
+    .test-convo-card.done-fail { background: #ffebee; border-left: 3px solid #c62828; }
+    .convo-title { font-weight: 600; margin-bottom: 2px; }
+    .convo-stats { color: #555; font-size: 12px; }
+    #test-overall {
+      display: none;
+      padding: 10px 20px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    #test-overall.active { display: block; }
 
   </style>
 </head>
@@ -452,7 +494,8 @@
   <div id="chat-header">
     <h1>🍽 Cashier Chatbot</h1>
     <div>
-      <button id="run-tests-btn">🧪 Run Tests</button>
+      <button id="run-tests-btn" class="header-btn">Run Tests</button>
+      <button id="real-convo-btn" class="header-btn">Real Convo Test</button>
       <button id="clear-btn">Clear</button>
     </div>
   </div>
@@ -507,6 +550,9 @@
         <div class="order-item"><div class="order-item-name">1× Jalapeño Poppers</div></div>
       </div>
     </div>
+    <div id="test-progress"></div>
+    <div id="test-convo-cards"></div>
+    <div id="test-overall"></div>
   </div>
 </div>
 
@@ -779,6 +825,10 @@
   // ── Test runner ────────────────────────────────────────────────
 
   const runTestsBtn = document.getElementById("run-tests-btn");
+  const realConvoBtn = document.getElementById("real-convo-btn");
+  const testProgress = document.getElementById("test-progress");
+  const testConvoCards = document.getElementById("test-convo-cards");
+  const testOverall = document.getElementById("test-overall");
 
   const TEST_SCRIPT = [
     "I'd like a Chicken Sub and a 2 Chicken Sandos & Fries",
@@ -872,6 +922,307 @@
   }
 
   runTestsBtn.addEventListener("click", runTestScript);
+
+  // ══════════════════════════════════════════════════════════════
+  //  REAL CONVERSATION TESTING: Final-state validation engine
+  // ══════════════════════════════════════════════════════════════
+
+  let realConvoRunning = false;
+
+  function normalizeStr(s) {
+    return (s || "").toLowerCase().replace(/['']/g, "'").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  }
+
+  function itemNamesMatch(actual, expected) {
+    const a = normalizeStr(actual);
+    const e = normalizeStr(expected);
+    if (a === e) return true;
+    if (a.includes(e) || e.includes(a)) return true;
+    const aWords = a.replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+    const eWords = e.replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+    const matched = eWords.filter(w => aWords.some(aw => aw.includes(w) || w.includes(aw)));
+    return matched.length >= Math.ceil(eWords.length * 0.7);
+  }
+
+  function validateFinalState(actualState, expectedItems) {
+    const actualItems = (actualState && actualState.items) ? actualState.items : [];
+
+    if (expectedItems.length === 0 && actualItems.length === 0) {
+      return { status: "pass", message: "Empty cart as expected", details: [] };
+    }
+
+    const details = [];
+    const matchedActual = new Set();
+
+    for (const exp of expectedItems) {
+      let bestIdx = -1, bestScore = 0;
+      for (let ai = 0; ai < actualItems.length; ai++) {
+        if (matchedActual.has(ai)) continue;
+        if (itemNamesMatch(actualItems[ai].name, exp.name)) {
+          const score = actualItems[ai].quantity === exp.quantity ? 2 : 1;
+          if (score > bestScore) { bestScore = score; bestIdx = ai; }
+        }
+      }
+      if (bestIdx === -1) {
+        details.push({ ok: false, text: `MISSING ${exp.quantity}x ${exp.name}` });
+      } else {
+        matchedActual.add(bestIdx);
+        const act = actualItems[bestIdx];
+        if (act.quantity !== exp.quantity) {
+          details.push({ ok: false, text: `${exp.name}: expected qty ${exp.quantity}, got ${act.quantity}` });
+        } else {
+          details.push({ ok: true, text: `${act.quantity}x ${act.name}` });
+        }
+      }
+    }
+
+    for (let ai = 0; ai < actualItems.length; ai++) {
+      if (!matchedActual.has(ai)) {
+        details.push({ ok: false, text: `EXTRA ${actualItems[ai].quantity}x ${actualItems[ai].name}` });
+      }
+    }
+
+    const allOk = details.every(d => d.ok);
+    return {
+      status: allOk ? "pass" : "fail",
+      message: allOk ? "Final order matches expected" : details.filter(d => !d.ok).map(d => d.text).join(" | "),
+      details,
+    };
+  }
+
+  function resetChatState() {
+    messageHistory = [];
+    orderState = null;
+    previousState = null;
+    previousFoodOrderState = null;
+    awaitingOrderConfirmation = false;
+    messagesEl.innerHTML = "";
+    renderOrderState(null);
+  }
+
+  function appendResultsBanner(html, status) {
+    const banner = document.createElement("div");
+    banner.className = `results-banner ${status || ""}`;
+    banner.innerHTML = html;
+    messagesEl.appendChild(banner);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function initProgressPanel(conversations) {
+    testConvoCards.innerHTML = "";
+    testOverall.classList.remove("active");
+    testOverall.innerHTML = "";
+
+    for (const convo of conversations) {
+      const card = document.createElement("div");
+      card.className = "test-convo-card";
+      card.id = `test-card-${convo.id}`;
+      card.innerHTML = `
+        <div class="convo-title">${convo.title}</div>
+        <div class="convo-stats" id="test-stats-${convo.id}">Pending...</div>
+      `;
+      testConvoCards.appendChild(card);
+    }
+    testProgress.classList.add("active");
+  }
+
+  function updateConvoCard(convoId, status, info) {
+    const card = document.getElementById(`test-card-${convoId}`);
+    const stats = document.getElementById(`test-stats-${convoId}`);
+    if (!card || !stats) return;
+
+    card.className = "test-convo-card";
+    if (status === "running") {
+      card.classList.add("running");
+      stats.innerHTML = info || "Running...";
+    } else if (status === "done") {
+      card.classList.add(info === "pass" ? "done-pass" : "done-fail");
+      stats.innerHTML = info === "pass"
+        ? '<span style="color:#2e7d32;font-weight:600">PASS</span> — final order correct'
+        : '<span style="color:#c62828;font-weight:600">FAIL</span> — final order mismatch';
+    } else if (status === "error") {
+      card.classList.add("done-fail");
+      stats.innerHTML = `<span style="color:#c62828;font-weight:600">ERROR</span> — ${info}`;
+    }
+  }
+
+  async function runRealConvoTesting() {
+    if (realConvoRunning) return;
+    realConvoRunning = true;
+    realConvoBtn.disabled = true;
+    runTestsBtn.disabled = true;
+    sendBtn.disabled = true;
+
+    resetChatState();
+    appendMessage("bot", "Loading real conversation test set...");
+
+    let testSet;
+    try {
+      const res = await fetch("/api/bot/real-convo-testing");
+      if (!res.ok) throw new Error("Failed to load");
+      testSet = await res.json();
+    } catch (e) {
+      appendMessage("bot", "Failed to load real conversation test set.");
+      realConvoRunning = false;
+      realConvoBtn.disabled = false;
+      runTestsBtn.disabled = false;
+      sendBtn.disabled = false;
+      return;
+    }
+
+    const conversations = testSet.conversations;
+    initProgressPanel(conversations);
+
+    let overallPass = 0, overallFail = 0;
+    const convoResults = [];
+
+    for (let ci = 0; ci < conversations.length; ci++) {
+      const convo = conversations[ci];
+
+      resetChatState();
+      appendMessage("bot", `Conversation ${ci + 1}/${conversations.length}: ${convo.title}`);
+      updateConvoCard(convo.id, "running", `turn 0/${convo.turns.length}`);
+
+      let hadError = false;
+
+      for (let ti = 0; ti < convo.turns.length; ti++) {
+        const turn = convo.turns[ti];
+
+        appendMessage("user", turn.user_message);
+        updateConvoCard(convo.id, "running", `turn ${ti + 1}/${convo.turns.length}`);
+
+        const body = {
+          user_id: USER_ID,
+          latest_message: turn.user_message,
+          message_history: messageHistory.length ? messageHistory : null,
+          order_state: orderState,
+          previous_state: previousState,
+          previous_food_order_state: previousFoodOrderState,
+          awaiting_order_confirmation: awaitingOrderConfirmation,
+        };
+
+        showTyping();
+
+        let data = null;
+        try {
+          const res = await fetch("/api/bot/message", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          hideTyping();
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+            appendMessage("bot", `Error: ${err.detail || res.statusText}`);
+            hadError = true;
+            continue;
+          }
+
+          data = await res.json();
+        } catch (e) {
+          hideTyping();
+          appendMessage("bot", "Network error");
+          hadError = true;
+          continue;
+        }
+
+        appendMessage("bot", data.chatbot_message, data.pickup_ping);
+
+        if (data.order_state !== undefined && data.order_state !== null) orderState = data.order_state;
+        if (data.previous_state !== undefined && data.previous_state !== null) previousState = data.previous_state;
+        if (data.previous_food_order_state !== undefined && data.previous_food_order_state !== null) previousFoodOrderState = data.previous_food_order_state;
+        awaitingOrderConfirmation = data.awaiting_order_confirmation ?? false;
+        renderOrderState(orderState);
+
+        if (data.pickup_ping) pickupOverlay.classList.remove("active");
+        if (data.ping_for_human) humanOverlay.classList.remove("active");
+
+        messageHistory.push({ role: "user", content: turn.user_message });
+        messageHistory.push({ role: "assistant", content: data.chatbot_message });
+
+        await new Promise(r => setTimeout(r, 600));
+      }
+
+      const result = validateFinalState(orderState, convo.expected_final_items);
+      const passed = result.status === "pass" && !hadError;
+
+      let resultHtml = `<strong>${convo.title} — `;
+      resultHtml += passed
+        ? '<span style="color:#2e7d32">PASS</span></strong>'
+        : '<span style="color:#c62828">FAIL</span></strong>';
+
+      if (result.details.length > 0) {
+        resultHtml += "<br><table style='margin-top:6px;border-collapse:collapse;width:100%'>";
+        for (const d of result.details) {
+          const color = d.ok ? "#2e7d32" : "#c62828";
+          const icon = d.ok ? "&#10003;" : "&#10007;";
+          resultHtml += `<tr><td style="padding:2px 8px;color:${color}">${icon} ${d.text}</td></tr>`;
+        }
+        resultHtml += "</table>";
+      }
+
+      if (hadError) resultHtml += '<br><span style="color:#f57f17">Some turns had API errors</span>';
+
+      appendResultsBanner(resultHtml, passed ? "pass" : "fail");
+
+      convoResults.push({ id: convo.id, title: convo.title, passed, details: result.details, hadError });
+
+      if (passed) {
+        updateConvoCard(convo.id, "done", "pass");
+        overallPass++;
+      } else {
+        updateConvoCard(convo.id, "done", "fail");
+        overallFail++;
+      }
+
+      if (ci < conversations.length - 1) {
+        appendMessage("bot", "Moving to next conversation in 2 seconds...");
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+
+    testOverall.innerHTML = `<strong>Overall: ${overallPass}/${conversations.length} passed</strong>` +
+      (overallFail > 0 ? ` &mdash; <span style="color:#c62828">${overallFail} failed</span>` : "");
+    testOverall.classList.add("active");
+
+    let finalHtml = `<strong>REAL CONVERSATION TEST COMPLETE</strong><br>`;
+    finalHtml += `${overallPass}/${conversations.length} conversations passed`;
+    if (overallFail > 0) finalHtml += ` &mdash; <span style="color:#c62828">${overallFail} failed</span>`;
+
+    finalHtml += "<br><br><strong>Summary:</strong><br>";
+    for (const cr of convoResults) {
+      const icon = cr.passed ? "&#10003;" : "&#10007;";
+      const color = cr.passed ? "#2e7d32" : "#c62828";
+      finalHtml += `<span style="color:${color}">${icon} ${cr.title}</span><br>`;
+    }
+
+    appendResultsBanner(finalHtml, overallFail === 0 ? "pass" : "fail");
+
+    try {
+      const reportLines = [`Real Convo Test: ${new Date().toISOString()}`];
+      reportLines.push(`${overallPass}/${conversations.length} passed, ${overallFail} failed`);
+      for (const cr of convoResults) {
+        reportLines.push(`  ${cr.passed ? "PASS" : "FAIL"}: ${cr.title}`);
+        for (const d of cr.details) {
+          reportLines.push(`    ${d.ok ? "OK" : "FAIL"}: ${d.text}`);
+        }
+      }
+      await fetch("/api/bot/save-test-results", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: reportLines.join("\n") }),
+      });
+    } catch (_) {}
+
+    realConvoRunning = false;
+    realConvoBtn.disabled = false;
+    runTestsBtn.disabled = false;
+    sendBtn.disabled = false;
+    inputEl.focus();
+  }
+
+  realConvoBtn.addEventListener("click", runRealConvoTesting);
 </script>
 </body>
 </html>

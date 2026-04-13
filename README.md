@@ -325,9 +325,115 @@ alembic current
 
 ---
 
+## Real Conversation Testing
+
+This repo ships with a validation suite built from **20 real Smash n Wings customer iMessage conversations**. The test runner replays each customer's messages through the chatbot one by one, then compares the final `order_state` against a hand-verified expected item list.
+
+### Prerequisites
+
+| Dependency | Why |
+|---|---|
+| **Redis** | The chatbot caches menu data and restaurant context per `user_id` |
+| **OpenAI API key** | All intent classification and extraction calls go through `gpt-4o-mini` |
+| **Python 3.13+ & uv** | Package management and runner |
+
+### 1. Start Redis
+
+If you have Docker installed:
+
+```bash
+docker run -d --name redis -p 6379:6379 redis:latest
+```
+
+Or if Redis is already running locally, just make sure it's reachable at `127.0.0.1:6379`.
+
+### 2. Create a `.env` file
+
+```env
+OPENAI_API_KEY=sk-...
+REDIS_URL=redis://127.0.0.1:6379
+ENVIRONMENT=development
+```
+
+Firebase credentials (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, `RESTAURANT_ID`) are optional for local testing — the server will skip Firebase init if they are not set.
+
+### 3. Install dependencies
+
+```bash
+uv sync
+```
+
+### 4. Seed menu data into Redis
+
+```bash
+uv run python scripts/seed_menu.py
+```
+
+This writes the menu context, item names, and restaurant info into Redis for `user_id = "1"`.
+
+### 5. Start the server
+
+```bash
+uv run uvicorn src.main:app --reload
+```
+
+Verify it's running — open [http://localhost:8000](http://localhost:8000) in your browser. You should see the chat UI.
+
+### 6. Run the Real Conversation Test
+
+In the browser at `http://localhost:8000`:
+
+1. Click the **Real Convo Test** button (orange, in the header bar).
+2. The runner will replay all 20 conversations automatically:
+   - Each customer message is sent to the bot one at a time.
+   - The bot's response and order state update are shown in real time.
+   - After all messages in a conversation are sent, the final order is validated.
+3. A **PASS/FAIL** result banner appears after each conversation with a detailed item-by-item comparison.
+4. After all 20 conversations, an overall summary shows how many passed.
+5. Results are saved to `test_results/run_<timestamp>.txt`.
+
+### What gets validated
+
+The test checks the **final `order_state.items`** after all customer messages are sent. For each conversation it verifies:
+
+- Every expected item is present (by fuzzy name match).
+- Item quantities are correct.
+- No unexpected extra items are in the order.
+
+Modifiers are intentionally **not** validated — the LLM's modifier assignment is non-deterministic and many real customer requests (e.g. "well done", "light onions") don't map to defined menu modifier options.
+
+### Test data
+
+| File | Description |
+|---|---|
+| `data/real_conversations_validation.json` | 20 real conversations: customer messages + expected final items |
+| `data/validation_test_set.json` | 4 synthetic scripted conversations (used by the **Run Tests** button) |
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/bot/real-convo-testing` | GET | Serves the real conversation test set |
+| `/api/bot/auto-testing` | GET | Serves the synthetic test set |
+| `/api/bot/save-test-results` | POST | Saves test run results to `test_results/` |
+
+### Conversation coverage
+
+The 20 conversations span a range of real ordering patterns:
+
+- **Simple orders** — single items (fish sandwich, chicken sub, hot honey burger)
+- **Multi-item orders** — 2–4 items in one message (burger + sub + fries + poppers)
+- **Multi-turn orders** — customer adds items across separate messages
+- **Modifier requests** — "no onions", "add bacon", "extra toasted", "double patty"
+- **Quantity orders** — "3 chicken subs", "2 classic burgers"
+- **Name + pickup** — customers provide names and request pickup times
+- **Non-order messages** — greetings, "how long?", "ASAP", "sounds good"
+
+---
+
 ## UI Regression Automation
 
-This repo includes a Selenium UI driver that replays user-only message flows in the browser UI and **keeps each flow window open** for manual validation.
+This repo also includes a Selenium UI driver that replays user-only message flows in the browser UI and **keeps each flow window open** for manual validation.
 
 ### Install Selenium
 

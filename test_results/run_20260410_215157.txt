@@ -1,0 +1,62 @@
+Real Convo Test: 2026-04-10T16:51:57.032Z
+10/20 passed, 10 failed
+  FAIL: Brett — Fish Sandwich
+    FAIL: MISSING 1x Fish
+  PASS: Ali — OG Chicken Sub
+    OK: 1x chicken sub
+  PASS: Yousif — Hot Honey Burger (no onions, add bacon)
+    OK: 1x hot honey burger
+  PASS: Anonymous — Chef Signature (no jalapeños)
+    OK: 1x chef's signature burger
+  PASS: Jason — Chicken Shawarma Smash Way
+    OK: 1x chicken shawarma smash way
+  FAIL: Vito — Chicken Sub + Ranch
+    OK: 1x chicken sub
+    FAIL: MISSING 1x Ranch
+  PASS: S — Chef's Signature + Hot Dog
+    OK: 1x chef's signature burger
+    OK: 1x hot dog
+  FAIL: Noor — Chicken Shawarma + All American
+    FAIL: MISSING 1x Chicken Shawarma Smash Way
+    OK: 1x all american burger
+  FAIL: Alaa — All American + Chicken Sub + Fries
+    FAIL: MISSING 1x All American Burger
+    OK: 1x chicken sub
+    OK: 1x regular fries
+  PASS: Abdallah — Chicken Sub + Salt & Pepper Fries
+    OK: 1x chicken sub
+    OK: 1x regular fries
+  PASS: Hass — All American + Jalapeño Poppers + Chicken Sub
+    OK: 1x all american burger
+    OK: 1x jalapeno poppers
+    OK: 1x chicken sub
+  FAIL: Moe — Signature + Classic + Animal Fries + Shawarma
+    OK: 1x chef's signature burger
+    FAIL: MISSING 1x Classic Burger
+    OK: 1x animal fries
+    OK: 1x chicken shawarma
+  FAIL: Zach — 2 Classic Burgers + Mozzarella Sticks
+    FAIL: MISSING 2x Classic Burger
+    FAIL: MISSING 1x Mozzarella Sticks
+  PASS: Ali — 12pc Bone-In Wings (Buffalo) + Chicken Sub
+    OK: 1x bone-in breaded wings
+    OK: 1x chicken sub
+  PASS: Zahra — Hot Honey Burger + Cajun Fries (multi-turn mods)
+    OK: 1x hot honey
+    OK: 1x regular fries
+  FAIL: Hassan M — 3 OG Chicken Subs with Fries
+    OK: 3x chicken sub
+    FAIL: EXTRA 1x regular fries
+  FAIL: Marty — Chicken Sub + Chef's Signature Double
+    OK: 1x chicken sub
+    OK: 1x chef's signature burger
+  FAIL: Hassan — 2 Chicken Subs (1 combo, multi-turn)
+    FAIL: Chicken Sub: expected qty 2, got 3
+    FAIL: EXTRA 2x regular fries
+  FAIL: Anonymous — 2 Chicken Subs + Boneless Wings + Hot Dog
+    FAIL: Chicken Sub: expected qty 2, got 1
+    OK: 1x boneless wings
+    OK: 1x hot dog
+    FAIL: EXTRA 1x chicken sub
+  PASS: Anonymous — 3 Classic Chicken Subs
+    OK: 3x chicken sub

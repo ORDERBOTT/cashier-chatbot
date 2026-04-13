@@ -1,0 +1,259 @@
+{
+  "description": "Validation test set built from real Smash n Wings iMessage conversations. Each conversation sends only customer messages to the bot and validates the final order_state.items.",
+  "conversations": [
+    {
+      "id": "real_01_brett_fish",
+      "title": "Brett — Fish Sandwich",
+      "turns": [
+        { "user_message": "Just a fish sandwich how long tell it's ready" },
+        { "user_message": "Brett" },
+        { "user_message": "Perfect thank you" }
+      ],
+      "expected_final_items": [
+        { "name": "Fish", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_02_ali_chicken_sub",
+      "title": "Ali — OG Chicken Sub",
+      "turns": [
+        { "user_message": "1 whole OG chicken sub" },
+        { "user_message": "For Ali, as soon as possible" },
+        { "user_message": "Yes" }
+      ],
+      "expected_final_items": [
+        { "name": "Chicken Sub", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_03_yousif_hot_honey",
+      "title": "Yousif — Hot Honey Burger (no onions, add bacon)",
+      "turns": [
+        { "user_message": "Hot honey burger, no onions, add bacon. Yousif" },
+        { "user_message": "Yes" }
+      ],
+      "expected_final_items": [
+        { "name": "Hot Honey Burger", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_04_chef_sig_no_jalapenos",
+      "title": "Anonymous — Chef Signature (no jalapeños)",
+      "turns": [
+        { "user_message": "Can I get a chef signature no jalapeños light sauce" },
+        { "user_message": "Yea" }
+      ],
+      "expected_final_items": [
+        { "name": "Chef's Signature Burger", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_05_jason_shawarma",
+      "title": "Jason — Chicken Shawarma Smash Way",
+      "turns": [
+        { "user_message": "Hi let me place an order for one of the smash way chicken shawarma's, with the pickles on the side. The name for the order is Jason." },
+        { "user_message": "Yes, 8:35 works." }
+      ],
+      "expected_final_items": [
+        { "name": "Chicken Shawarma Smash Way", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_06_vito_sub_ranch",
+      "title": "Vito — Chicken Sub + Ranch",
+      "turns": [
+        { "user_message": "Vito\n\nClassic chicken sub\n\nSide ranch" },
+        { "user_message": "ASAP" },
+        { "user_message": "Sounds good" }
+      ],
+      "expected_final_items": [
+        { "name": "Chicken Sub", "quantity": 1 },
+        { "name": "Ranch", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_07_s_chef_hotdog",
+      "title": "S — Chef's Signature + Hot Dog",
+      "turns": [
+        { "user_message": "Heyy, can I get one chefs signature with no! Jalapeños then one hot dog , name is S thank you!." },
+        { "user_message": "Can it be sooner then 1:00?" },
+        { "user_message": "Ok" }
+      ],
+      "expected_final_items": [
+        { "name": "Chef's Signature Burger", "quantity": 1 },
+        { "name": "Hot Dog", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_08_noor_shawarma_burger",
+      "title": "Noor — Chicken Shawarma + All American",
+      "turns": [
+        { "user_message": "Noor\n\nAsap\n\nChicken shawarma sub smash way\nAll American burger" },
+        { "user_message": "Yes" }
+      ],
+      "expected_final_items": [
+        { "name": "Chicken Shawarma Smash Way", "quantity": 1 },
+        { "name": "All American Burger", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_09_alaa_burger_sub_fries",
+      "title": "Alaa — All American + Chicken Sub + Fries",
+      "turns": [
+        { "user_message": "All American burger no onions no mayo and a throwback chicken sub and side of fries" },
+        { "user_message": "Perfect" },
+        { "user_message": "Alaa" }
+      ],
+      "expected_final_items": [
+        { "name": "All American Burger", "quantity": 1 },
+        { "name": "Chicken Sub", "quantity": 1 },
+        { "name": "Regular Fries", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_10_abdallah_sub_fries",
+      "title": "Abdallah — Chicken Sub + Salt & Pepper Fries",
+      "turns": [
+        { "user_message": "pickup for abdallah\n1 chicken sub extra pickles side of salt and pepper fries" },
+        { "user_message": "set it for 9:10 please and thanks" }
+      ],
+      "expected_final_items": [
+        { "name": "Chicken Sub", "quantity": 1 },
+        { "name": "Regular Fries", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_11_hass_burger_poppers_sub",
+      "title": "Hass — All American + Jalapeño Poppers + Chicken Sub",
+      "turns": [
+        { "user_message": "Order for hass\n1-all American burger well done\n1 - jalapeño poppers\n1 - original chicken sub" },
+        { "user_message": "Hold on might order more" },
+        { "user_message": "I'll text back" },
+        { "user_message": "Order for hass\n1-all American burger well done\n1 - jalapeño poppers\n1 - original chicken sub" },
+        { "user_message": "Yes" }
+      ],
+      "expected_final_items": [
+        { "name": "All American Burger", "quantity": 1 },
+        { "name": "Jalapeno Poppers", "quantity": 1 },
+        { "name": "Chicken Sub", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_12_moe_4_items",
+      "title": "Moe — Signature + Classic + Animal Fries + Shawarma",
+      "turns": [
+        { "user_message": "Hi could I order for a pickup under the name Moe, \n\nSignature burger double patty \nClassic double patty add hot honey \nAnimal fries \nChicken shawarma smash way" },
+        { "user_message": "How long is the wait time?" }
+      ],
+      "expected_final_items": [
+        { "name": "Chef's Signature Burger", "quantity": 1 },
+        { "name": "Classic Burger", "quantity": 1 },
+        { "name": "Animal Fries", "quantity": 1 },
+        { "name": "Chicken Shawarma Smash Way", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_13_zach_2_classics_mozz",
+      "title": "Zach — 2 Classic Burgers + Mozzarella Sticks",
+      "turns": [
+        { "user_message": "Hey, I'd like to place a pickup order for Zach\n\n1. Classic burger, light onions, double patty\n2. Classic burger, no pickles, light onions, double patty\n3. Side of mozzarella sticks with marinara\n\nThanks, let me know when to get there" }
+      ],
+      "expected_final_items": [
+        { "name": "Classic Burger", "quantity": 2 },
+        { "name": "Mozzarella Sticks", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_14_ali_wings_sub",
+      "title": "Ali — 12pc Bone-In Wings (Buffalo) + Chicken Sub",
+      "turns": [
+        { "user_message": "1x 12pc Bone-In Breaded\n1x Chicken Sub\nName: Ali" },
+        { "user_message": "Yea" },
+        { "user_message": "Can I do Buffalo for the bone in?" },
+        { "user_message": "Thank you!" }
+      ],
+      "expected_final_items": [
+        { "name": "Bone-In Breaded Wings", "quantity": 1 },
+        { "name": "Chicken Sub", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_15_zahra_hot_honey_fries",
+      "title": "Zahra — Hot Honey Burger + Cajun Fries (multi-turn mods)",
+      "turns": [
+        { "user_message": "Hello, can I get the hot honey double smashed burger if there's no caramelized onions on it, can I please add that as well? I would also like to add a side of Cajun fries. The order is for zahra order pick up time at 6:40." },
+        { "user_message": "Yes, that's OK For both" },
+        { "user_message": "Could I add your guises house sauce to the burger as well?" }
+      ],
+      "expected_final_items": [
+        { "name": "Hot Honey Burger", "quantity": 1 },
+        { "name": "Regular Fries", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_16_hassan_3_subs",
+      "title": "Hassan M — 3 OG Chicken Subs with Fries",
+      "turns": [
+        { "user_message": "3 OG chicken subs with fries please" },
+        { "user_message": "Yes" },
+        { "user_message": "Hassan M" }
+      ],
+      "expected_final_items": [
+        { "name": "Chicken Sub", "quantity": 3 }
+      ]
+    },
+    {
+      "id": "real_17_marty_sub_chef_sig",
+      "title": "Marty — Chicken Sub + Chef's Signature Double",
+      "turns": [
+        { "user_message": "Hello can i place an order for pick up" },
+        { "user_message": "Can i have the og chicken sub the new one you guys have extra toasted extra mayo \n\n1 chef signature burger double patty please" },
+        { "user_message": "Yeah thats good" },
+        { "user_message": "Marty" }
+      ],
+      "expected_final_items": [
+        { "name": "Chicken Sub", "quantity": 1 },
+        { "name": "Chef's Signature Burger", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_18_hassan_2_subs_combo",
+      "title": "Hassan — 2 Chicken Subs (1 combo, multi-turn)",
+      "turns": [
+        { "user_message": "Can I make an order please" },
+        { "user_message": "Can I get a chicken sub no tomatoes extra mayo extra toasted." },
+        { "user_message": "1 chicken sub no tomatoes no lettuce extra toasted combo" },
+        { "user_message": "Yes" },
+        { "user_message": "Hassan" }
+      ],
+      "expected_final_items": [
+        { "name": "Chicken Sub", "quantity": 2 }
+      ]
+    },
+    {
+      "id": "real_19_subs_wings_hotdog",
+      "title": "Anonymous — 2 Chicken Subs + Boneless Wings + Hot Dog",
+      "turns": [
+        { "user_message": "Can I place an order for pickup please?\n\n1 chicken sub no tomatoes\n1 chicken sub \n\n(2 sides of mayo)\n\n6 piece boneless wings chili mango \n1 hot dog" },
+        { "user_message": "Can I make one of the subs a combo with fries and a drink" },
+        { "user_message": "Yes 5:15 works" }
+      ],
+      "expected_final_items": [
+        { "name": "Chicken Sub", "quantity": 2 },
+        { "name": "Boneless Wings", "quantity": 1 },
+        { "name": "Hot Dog", "quantity": 1 }
+      ]
+    },
+    {
+      "id": "real_20_3_chicken_subs",
+      "title": "Anonymous — 3 Classic Chicken Subs",
+      "turns": [
+        { "user_message": "Hi can I place an order\n3 classic chicken sub" },
+        { "user_message": "Yes no problem" }
+      ],
+      "expected_final_items": [
+        { "name": "Chicken Sub", "quantity": 3 }
+      ]
+    }
+  ]
+}
