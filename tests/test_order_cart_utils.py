@@ -38,6 +38,32 @@ def test_strip_order_state_for_delta_removes_derived_fields_and_flattens_selecte
     }
 
 
+def test_strip_order_state_for_delta_dedupes_duplicate_selected_mod_values():
+    order_state = {
+        "items": [
+            {
+                "name": "Hot Honey Burger",
+                "quantity": 3,
+                "modifier": None,
+                "selected_mods": {
+                    "Lettuce Bun": "No Mods",
+                    "Make It a Combo With Fries": ["No Mods"],
+                },
+            }
+        ]
+    }
+
+    assert strip_order_state_for_delta(order_state) == {
+        "items": [
+            {
+                "name": "Hot Honey Burger",
+                "quantity": 3,
+                "modifier": "No Mods",
+            }
+        ]
+    }
+
+
 def test_normalize_order_items_merges_identical_rows_only():
     items = [
         {"name": "Chicken Sando", "quantity": 1, "modifier": "spicy"},

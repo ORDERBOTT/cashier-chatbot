@@ -79,6 +79,12 @@ class ModifierValidationIssue(BaseModel):
     allowed_options: list[str] = Field(default_factory=list)
 
 
+class ClosestModifierResolution(BaseModel):
+    status: Literal["match", "no_match"]
+    canonical_modifier: str | None = None
+    reasoning: str | None = None
+
+
 class OrderFollowUpRequirement(BaseModel):
     kind: Literal["burger_patties", "wings_quantity", "wings_flavor", "wings_flavor_limit"]
     item_name: str

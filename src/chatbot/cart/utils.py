@@ -11,6 +11,19 @@ def _item_key(item: dict) -> tuple:
     )
 
 
+def _dedupe_modifier_values(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        normalized = text.lower()
+        if not text or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(text)
+    return deduped
+
+
 def _modifier_from_item(item: dict) -> str | None:
     modifier = item.get("modifier")
     if modifier is not None:
@@ -29,6 +42,7 @@ def _modifier_from_item(item: dict) -> str | None:
         elif value is not None and str(value).strip():
             flattened.append(str(value).strip())
 
+    flattened = _dedupe_modifier_values(flattened)
     if not flattened:
         return None
     return ", ".join(flattened)

@@ -114,19 +114,74 @@ def _dedupe_invalid_modifiers(issues: list[ModifierValidationIssue]) -> list[Mod
     return deduped
 
 
+def _dedupe_option_names(options: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for option in options:
+        text = str(option).strip()
+        normalized = text.lower()
+        if not text or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(text)
+    return deduped
+
+
+def _group_invalid_modifier_issues(issues: list[ModifierValidationIssue]) -> list[dict]:
+    groups: list[dict] = []
+    index_by_key: dict[tuple[str, tuple[str, ...]], int] = {}
+
+    for issue in issues:
+        item_name = issue.item_name.strip()
+        allowed_options = _dedupe_option_names(issue.allowed_options)
+        key = (
+            item_name.lower(),
+            tuple(option.lower() for option in allowed_options),
+        )
+        if key not in index_by_key:
+            index_by_key[key] = len(groups)
+            groups.append(
+                {
+                    "item_name": item_name,
+                    "allowed_options": allowed_options,
+                    "invalid_modifiers": [],
+                }
+            )
+
+        invalid_modifier = issue.invalid_modifier.strip()
+        group = groups[index_by_key[key]]
+        if invalid_modifier and invalid_modifier.lower() not in {
+            value.lower() for value in group["invalid_modifiers"]
+        }:
+            group["invalid_modifiers"].append(invalid_modifier)
+
+    return groups
+
+
+def _format_modifier_list(values: list[str]) -> str:
+    if not values:
+        return ""
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        return f"{values[0]} and {values[1]}"
+    return f"{', '.join(values[:-1])}, and {values[-1]}"
+
+
 def _build_invalid_modifier_messages(issues: list[ModifierValidationIssue]) -> list[str]:
     messages: list[str] = []
-    for issue in issues:
-        allowed = ", ".join(issue.allowed_options)
+    for group in _group_invalid_modifier_issues(issues):
+        invalid_modifiers = group["invalid_modifiers"]
+        allowed = ", ".join(group["allowed_options"])
+        if len(invalid_modifiers) == 1:
+            messages.append(
+                f'{invalid_modifiers[0]} is not allowed for {group["item_name"]}. Allowed options are {allowed}.'
+            )
+            continue
         messages.append(
-            f'{issue.invalid_modifier} is not allowed for {issue.item_name}. Allowed options are {allowed}.'
+            f'{_format_modifier_list(invalid_modifiers)} are not allowed for {group["item_name"]}. Allowed options are {allowed}.'
         )
     return messages
-
-
-def _reply_mentions_invalid_modifier(reply: str, issue: ModifierValidationIssue) -> bool:
-    normalized_reply = reply.lower()
-    return issue.invalid_modifier.lower() in normalized_reply and "not allowed" in normalized_reply
 
 
 def _build_fallback_cashier_reply(order_state: dict, outcome: OrderProcessingOutcome) -> str:
@@ -230,7 +285,10 @@ class OrderStateHandler:
             accepted_items = _build_canonical_items(match_results)
             print("[order] accepted_items_after_menu_match:", accepted_items)
 
-        modifier_validation = await validate_order_item_modifiers(accepted_items)
+        modifier_validation = await validate_order_item_modifiers(
+            accepted_items,
+            latest_message=request.latest_message,
+        )
         accepted_items = normalize_order_items(modifier_validation.items)
         print("[order] accepted_items_after_modifier_validation:", accepted_items)
         print(
@@ -325,7 +383,10 @@ class OrderStateHandler:
             combo_result.combo_event.model_dump() if combo_result.combo_event else None,
         )
 
-        validation_result = await validate_order_items(combo_result.order_state.get("items", []))
+        validation_result = await validate_order_items(
+            combo_result.order_state.get("items", []),
+            latest_message=request.latest_message,
+        )
         print("[order] finalize.validation_items:", validation_result.items)
         print(
             "[order] finalize.invalid_modifiers:",
@@ -382,17 +443,6 @@ class OrderStateHandler:
         except AIServiceError as exc:
             print("[reply] fallback_due_to_error:", exc)
             return _build_fallback_cashier_reply(final_order_state, outcome)
-
-        missing_invalid_modifier_messages = [
-            message
-            for issue, message in zip(
-                outcome.invalid_modifiers,
-                _build_invalid_modifier_messages(outcome.invalid_modifiers),
-            )
-            if not _reply_mentions_invalid_modifier(reply, issue)
-        ]
-        if missing_invalid_modifier_messages:
-            reply = " ".join([reply, *missing_invalid_modifier_messages]).strip()
 
         return reply
 
