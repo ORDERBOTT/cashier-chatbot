@@ -1,102 +1,79 @@
 # Cashier Chatbot
 
-An AI-powered restaurant cashier chatbot built with FastAPI, Gemini, and Redis. It handles natural-language food ordering conversations through a browser-based chat UI — taking orders, answering menu and restaurant questions, applying modifiers, resolving ambiguous items via fuzzy matching, and pinging staff on demand.
+FastAPI backend for an AI-assisted restaurant cashier: natural-language ordering, menu Q&A, restaurant Q&A, pickup cues, and staff escalation. The browser UI is a small vanilla-JS page served from `templates/index.html`.
 
----
+## Contents
 
-## Table of Contents
-
-- [Architecture](#architecture)
-- [Conversation Flow](#conversation-flow)
+- [Stack](#stack)
+- [Architecture (request path)](#architecture-request-path)
+- [Conversation states](#conversation-states)
 - [Setup](#setup)
-- [Adding Menu Data & Restaurant Info](#adding-menu-data--restaurant-info)
-- [Running the Server](#running-the-server)
-- [Project Structure](#project-structure)
-- [Development Commands](#development-commands)
+- [Running the server](#running-the-server)
+- [Project structure](#project-structure-high-level)
+- [Development commands](#development-commands)
 
 ---
 
-## Architecture
+## Stack
 
-```
-Browser (index.html)
-    │  POST /api/bot/message
-    ▼
-ChatReplyService
-    ├── StateResolver          — classifies the user's intent (Gemini 2.5 Flash, structured JSON)
-    │   └── StateVerifier      — double-checks low-confidence or invalid-transition results
-    │
-    └── StateHandlerFactory    — routes to the correct handler
-            │
-            ├── Greeting / Farewell / Misc / VagueMessage / HumanEscalation
-            ├── RestaurantQuestionHandler  — answers from restaurant_context Redis key
-            ├── MenuQuestionHandler        — answers from menu_context Redis key
-            ├── PickupPingHandler          — signals order-ready status to frontend
-            └── FoodOrderHandlerFactory
-                    ├── FoodOrderStateResolver  — classifies the order sub-intent
-                    └── Handlers
-                            ├── new_order        — extract → fuzzy match → add to state
-                            ├── add_to_order     — extract new items, merge into state
-                            ├── modify_order     — change quantity / modifier on existing item
-                            ├── remove_from_order
-                            ├── swap_item        — atomic remove + add
-                            └── cancel_order
-
-Redis (per user_id)
-    menu_context:{user_id}               — full menu text for menu Q&A
-    menu_item_names:{user_id}            — comma-separated names for fuzzy matching
-    restaurant_context:{user_id}         — restaurant info for restaurant Q&A
-    restaurant_name_location:{user_id}   — name + address for greeting
-```
-
-**Key design decisions:**
-
-- **Stateless backend** — the frontend sends the full conversation history and current order state with every request; the server holds no session.
-- **Two-stage intent classification** — a fast primary classifier is checked by an independent verifier only when confidence is low or the state transition is invalid.
-- **Fuzzy item matching** — user item names are matched against canonical menu names using RapidFuzz (WRatio scorer), with three outcomes: confirmed (≥ 70), ambiguous (multiple close matches), or not found (< 50).
-- **All AI calls use `gemini-2.5-flash`** with schema-enforced JSON output for extraction/classification, and text generation with `temperature=0.4–0.7` for natural-language replies.
+| Layer | Choice |
+|--------|--------|
+| Runtime | Python 3.13 |
+| Web | FastAPI, Uvicorn, Starlette |
+| LLM | [Google Gen AI SDK](https://github.com/googleapis/python-genai) (`google-genai`) — model name from `GEMINI_MODEL` (default in code: `gemini-3-flash-preview`) |
+| Structured output | Pydantic v2 schemas + Gemini JSON / text helpers in `src/chatbot/gemini_client.py` |
+| Menu in memory | `data/inventory.json` loaded at startup (`src/menu/loader.py`) |
+| Menu persistence (ingest) | Firebase Admin → Async Firestore (`src/firebase.py`, `src/menu/sync.py`) |
+| Cache / summaries | Redis (`src/cache.py`) — conversation summaries and optional restaurant profile overrides |
+| Fuzzy matching | RapidFuzz (`src/chatbot/clarification/`) |
+| Tooling | [uv](https://github.com/astral-sh/uv), Ruff, pytest |
+| DB (scaffold) | SQLAlchemy async + Alembic under `src/database.py` / `alembic/` — **not** wired into `src/main.py` today |
 
 ---
 
-## Conversation Flow
+## Architecture (request path)
 
-### Conversation states
+```
+Browser
+  POST /api/bot/message  (BotInteractionRequest)
+       │
+       ▼
+ChatReplyService  (src/chatbot/infrastructure/service.py)
+  │
+  ├─ compress_history_if_needed  — long histories → Redis-backed summary + recent tail
+  │     (src/chatbot/infrastructure/summarizer.py)
+  │
+  ├─ ConversationStateResolver  — intent → ConversationState (high confidence + valid transition)
+  │     (src/chatbot/intent/resolver.py, ai_client.py, transitions.py)
+  │
+  └─ StateHandlerFactory  — reply per conversation state
+        (src/chatbot/visibility/handlers.py)
+        │
+        ├─ greeting / farewell / vague / misc / human_escalation / pickup_* / order_*  → visibility AI helpers
+        ├─ restaurant_question / menu_question  → context + Gemini replies
+        └─ food_order  → OrderStateHandler
+              (src/chatbot/cart/handlers.py)
+              ├─ OrderExtractor  (src/chatbot/extraction/) — deltas, confirmation replies, etc.
+              ├─ FuzzyMatcher + ClarificationBuilder  (src/chatbot/clarification/) — menu line matching
+              ├─ modifier resolution / pricing  (src/menu/loader.py)
+              └─ combos / polish  (src/chatbot/cart/combo_service.py, cart/ai_client.py)
+```
 
-| State | Trigger | Response |
-|---|---|---|
-| `greeting` | First message / hello | Welcome with restaurant name and location |
-| `farewell` | Goodbye / thanks | Warm sign-off |
-| `menu_question` | Questions about dishes, prices, allergens | Answered from menu context |
-| `restaurant_question` | Hours, location, parking, seating | Answered from restaurant context |
-| `food_order` | Placing or changing an order | Routed to food order sub-state |
-| `pickup_ping` | "How long?" / "Is it ready?" | `pickup_ping: true` flag sent to frontend |
-| `human_escalation` | "Can I speak to someone?" | `ping_for_human: true` flag — triggers staff popup |
-| `vague_message` | Unclear intent | Clarifying question |
-| `misc` | Off-topic chat | Brief reply + redirect |
+**Design notes**
 
-### Food order sub-states
+- **Stateless HTTP**: the client sends `message_history`, `order_state`, and `previous_state` each turn; the server does not keep HTTP sessions (Redis is only for summaries and optional cached restaurant fields).
+- **Intent gating**: only **high**-confidence intents that satisfy `VALID_TRANSITIONS` are accepted; otherwise the flow falls back to `vague_message`.
+- **Menu source of truth for the bot**: in-process menu built from `data/inventory.json` (see [Menu data](#menu-data)). Ingest pushes the same shape to Firestore for storage/sync.
 
-| Sub-state | Example |
-|---|---|
-| `new_order` | "I'll have a burger and a Coke" |
-| `add_to_order` | "Also get me some fries" |
-| `modify_order` | "Make the burger a double" |
-| `remove_from_order` | "Actually drop the Coke" |
-| `swap_item` | "Swap the Coke for a milkshake" |
-| `cancel_order` | "Cancel everything" |
+---
 
-### Order confirmation flow
+## Conversation states
 
-After each successful order update the bot asks "Is that all?". The next message is classified as `confirm`, `modify`, or `unclear` by a dedicated finalization classifier — bypassing the main intent pipeline entirely.
+Defined in `src/chatbot/constants.py` (`ConversationState`). High-level set:
 
-### Item matching
+`greeting`, `farewell`, `vague_message`, `restaurant_question`, `menu_question`, `food_order`, `pickup_ping`, `pickup_time_suggestion`, `misc`, `human_escalation`, `order_complete`, `order_review`.
 
-When a user names an item:
-
-1. Exact case-insensitive match → confirmed immediately.
-2. Fuzzy match score ≥ 70 with no close competitors → confirmed, name normalised to canonical menu name.
-3. Multiple matches within 6 points of each other → bot asks "Did you mean X, Y, or Z?" and sets `has_pending_clarification: true`.
-4. Best score < 50 → "I couldn't find that on our menu."
+Food-order behaviour (extract, match, clarify, finalize) lives under `src/chatbot/cart/` and `src/chatbot/extraction/` rather than a single monolithic handler file.
 
 ---
 
@@ -106,8 +83,9 @@ When a user names an item:
 
 - Python 3.13+
 - [uv](https://github.com/astral-sh/uv)
-- Redis (local or remote)
-- A Gemini API key
+- Redis reachable at the URL you configure
+- A **Gemini** API key (`GEMINI_API_KEY`, or `OPENAI_API_KEY` as a supported alias name in code)
+- Firebase **service account** fields for Firestore (used by menu ingest)
 
 ### Install
 
@@ -119,205 +97,172 @@ uv sync
 
 ### Environment variables
 
-Create a `.env` file in the project root:
-
-```env
-OPENAI_API_KEY=sk-...
-REDIS_URL=redis://127.0.0.1:6379
-ENVIRONMENT=development
-```
+Create a `.env` in the project root. These map to `src/config.py` (`Config`).
 
 | Variable | Required | Description |
-|---|---|---|
-| `GEMINI_API_KEY` | Yes | Gemini API key (preferred for all AI calls) |
-| `OPENAI_API_KEY` | No | Temporary fallback env var name for existing deployments migrating to Gemini |
-| `REDIS_URL` | Yes | Redis connection URL |
+|----------|----------|-------------|
+| `REDIS_URL` | Yes | e.g. `redis://127.0.0.1:6379/0` |
+| `GEMINI_API_KEY` | Yes* | Google AI Studio / Gemini API key |
+| `OPENAI_API_KEY` | No | Alternative env name read by the same code path if `GEMINI_API_KEY` is unset |
+| `GEMINI_MODEL` | No | Overrides default model id from settings |
+| `FIREBASE_PROJECT_ID` | Yes | GCP project id |
+| `FIREBASE_CLIENT_EMAIL` | Yes | Service account email |
+| `FIREBASE_PRIVATE_KEY` | Yes | PEM private key; use `\n` in `.env` for newlines |
+| `RESTAURANT_ID` | Yes | Firestore document id under `menus/{RESTAURANT_ID}` when ingesting |
 | `ENVIRONMENT` | No | `development` (default), `staging`, or `production` |
+| `USER_ID` | No | Optional default used by some helpers |
+
+\*One of `GEMINI_API_KEY` or `OPENAI_API_KEY` must be set so `gemini_client` can authenticate.
+
+> **Note:** `src/database.py` expects `DATABASE_URL` on settings for SQLAlchemy, but `src/main.py` does not import the DB layer. Add `DATABASE_URL` to settings only if you start using the database module or Alembic against a live engine.
+
+### Menu data
+
+1. **Local file (what the bot reads):** `data/inventory.json` — loaded on app startup via `init_menu()` in `src/menu/loader.py`. Ensure this file exists and is valid JSON before running the server.
+2. **Firestore sync:** `POST /menu/ingest` accepts an inventory payload, writes categories/items under `menus/{RESTAURANT_ID}` in Firestore (`src/menu/sync.py`), then calls `init_menu()` to refresh the in-memory menu.
+
+Reference payloads: `data/example_menu.json`, `data/normalized_menu.json`.
+
+### Redis and startup behaviour
+
+On startup, `src/main.py`:
+
+1. Connects to Redis  
+2. Runs **`FLUSHALL`** (`cache_flush_all`) — **every key in that Redis DB is cleared**  
+3. Initializes Firebase and reloads the menu from disk  
+
+Use a dedicated Redis database index (or instance) for this project. After restart, re-seed any optional Redis keys you rely on (see below).
+
+### Optional Redis keys (restaurant profile overrides)
+
+Handlers in `src/chatbot/visibility/` read Redis keys templated with `user_id` when present (see `src/chatbot/visibility/constants.py`), for example:
+
+- `restaurant_name_location:{user_id}` — name and location string  
+- `restaurant_context:{user_id}` — free-text context for restaurant Q&A  
+- `restaurant_name:{user_id}`, `restaurant_city:{user_id}`, `restaurant_phone:{user_id}`, …  
+- `restaurantContext:{user_id}` — JSON blob merged into profile  
+
+If absent, code uses fallbacks or empty profile fields as implemented in `src/chatbot/visibility/utils.py`.
+
+### Legacy seed script
+
+`scripts/seed_menu.py` seeds older `menu_context:*` / `menu_item_names:*` keys from `src/constants.py`. The **live** menu Q&A path uses `get_menu_context()` from `src/menu/loader.py` (inventory file), not those Redis keys. Prefer updating `data/inventory.json` or using `/menu/ingest` for current behaviour.
 
 ---
 
-## Adding Menu Data & Restaurant Info
-
-All data is stored in Redis, scoped per `user_id`. The default `user_id` used by the web UI is `"1"`.
-
-### Menu items
-
-Menu items are defined in `src/constants.py` as `MENU_ITEM_MAP`. Each entry follows this structure:
-
-```python
-"Item Name": {
-    "description": "Short description of the item.",
-    "price": 9.50,                              # float
-    "modifiers": [                              # size / preparation options
-        "Make it double (+£2.00)",
-        "Make it gluten-free (+£1.00)",
-    ],
-    "add_ons": [                                # extras
-        "Extra cheese (£1.00)",
-        "Bacon (£1.50)",
-    ],
-},
-```
-
-To add, remove, or edit menu items, update `MENU_ITEM_MAP` in `src/constants.py`, then re-run the seed script.
-
-### Restaurant context
-
-The seed script (`scripts/seed_menu.py`) writes the restaurant name and address:
-
-```python
-RESTAURANT_NAME_LOCATION_STRING = "The Burger Joint, 123 Main St, Anytown, USA"
-```
-
-To answer questions about hours, parking, seating etc., set the `restaurant_context` key directly in Redis:
-
-```bash
-redis-cli SET "restaurant_context:1" "Opening hours: Mon–Sun 10am–10pm. Seating: 60 covers. Free parking at rear. Phone: 01234 567890."
-```
-
-Or extend `scripts/seed_menu.py` to write this key alongside the others.
-
-### Seed the data
-
-After any changes to `src/constants.py` or the seed script, run:
-
-```bash
-python scripts/seed_menu.py
-```
-
-This writes three Redis keys for `user_id = "1"`:
-
-| Key | Content |
-|---|---|
-| `menu_context:1` | Full menu text with prices, descriptions, modifiers, and add-ons |
-| `menu_item_names:1` | Comma-separated item names used for fuzzy matching |
-| `restaurant_name_location:1` | Restaurant name and address shown in the greeting |
-
----
-
-## Running the Server
+## Running the server
 
 ```bash
 uvicorn src.main:app --reload
 ```
 
-Open `http://localhost:8000` in your browser. The chat UI is served from `templates/index.html`.
+Open `http://localhost:8000` — root route serves `templates/index.html`.
 
 ### API
 
+**Chat**
+
 `POST /api/bot/message`
 
-**Request body:**
+Request body (`BotInteractionRequest` in `src/chatbot/schema.py`):
 
 ```json
 {
   "user_id": "1",
-  "latest_message": "I'll have a Classic Beef Burger please",
+  "latest_message": "I'll have two wings combos please",
   "message_history": [],
   "order_state": null,
   "previous_state": null,
-  "previous_food_order_state": null,
-  "awaiting_order_confirmation": false,
-  "has_pending_clarification": false
+  "customer_name": null
 }
 ```
 
-**Response:**
+Response (`ChatbotResponse`):
 
 ```json
 {
-  "chatbot_message": "Got it! I've added 1x Classic Beef Burger to your order. Is that all?",
-  "order_state": { "items": [{ "name": "Classic Beef Burger", "quantity": 1, "modifier": null }] },
+  "chatbot_message": "...",
   "pickup_ping": false,
   "ping_for_human": false,
+  "order_state": { "items": [] },
   "previous_state": "food_order",
-  "previous_food_order_state": "new_order",
-  "awaiting_order_confirmation": true,
-  "has_pending_clarification": false
+  "customer_name": null,
+  "pickup_time_suggestion": null,
+  "pickup_time_suggestion_timestamp": null
 }
 ```
 
-The frontend is responsible for maintaining state between turns and sending it back with each request.
+The demo UI may send extra fields (e.g. `awaiting_order_confirmation`); Pydantic ignores unknown keys on the request model.
 
-**Response flags:**
+**Save test transcripts (dev helper)**
 
-| Flag | Effect |
-|---|---|
-| `pickup_ping: true` | Shows the "Order Placed" modal with order summary |
-| `ping_for_human: true` | Shows the "Cashier Called" staff popup |
-| `has_pending_clarification: true` | Order state not updated yet; bot is waiting for user input |
-| `awaiting_order_confirmation: true` | Next message goes directly to the finalization classifier |
+`POST /api/bot/save-test-results` — writes `body.content` under `test_results/`.
+
+**Menu ingest**
+
+`POST /menu/ingest` — body is a flat map of item id → inventory item (see `src/menu/schema.py`). Requires Firebase env vars and `RESTAURANT_ID`.
 
 ---
 
-## Project Structure
+## Project structure (high level)
 
 ```
 cashier-chatbot/
-├── scripts/
-│   ├── seed_menu.py          # Seed menu + restaurant data into Redis
-│   ├── create_app.py         # Scaffold a new src/<module> directory
-│   └── init_ai.py            # Scaffold an src/ai/ module structure
-│
+├── data/
+│   ├── inventory.json          # Menu loaded into memory at startup
+│   ├── example_menu.json
+│   └── normalized_menu.json
+├── scripts/                    # seed_menu, fetch/build menu helpers, create_app, init_ai, …
 ├── src/
-│   ├── main.py               # FastAPI app, lifespan, router registration
-│   ├── config.py             # Pydantic settings (reads .env)
-│   ├── database.py           # Async SQLAlchemy engine + session factory
-│   ├── cache.py              # Redis async helpers (cache_get, cache_set, cache_delete)
-│   ├── constants.py          # MENU_ITEM_MAP, MENU_CONTEXT_STRING
-│   │
-│   ├── chatbot/
-│   │   ├── router.py                  # POST /api/bot/message
-│   │   ├── service.py                 # ChatReplyService — top-level orchestrator
-│   │   ├── chatbot_ai.py              # ChatbotAI compatibility wrapper
-│   │   ├── handlers.py                # StateHandlerFactory — one handler per ConversationState
-│   │   ├── food_order_handlers.py     # FoodOrderHandlerFactory — order sub-state handlers + fuzzy matching
-│   │   ├── state_resolver.py          # StateResolver + FoodOrderStateResolver
-│   │   ├── prompts.py                 # All system prompts
-│   │   ├── schema.py                  # BotMessageRequest, BotMessageResponse, OrderItem, …
-│   │   ├── internal_schemas.py        # AI response schemas (IntentAnalysis, etc.)
-│   │   ├── constants.py               # ConversationState, FoodOrderState enums
-│   │   ├── exceptions.py              # AIServiceError, UnhandledStateError, …
-│   │   └── exception_handlers.py      # FastAPI exception handler registration
-│   │
-│   └── menu/                          # Scaffolded module — ingestion endpoint stub
-│
-├── templates/
-│   └── index.html            # Browser chat UI (vanilla JS, no build step)
-│
+│   ├── main.py                 # FastAPI app, lifespan (Redis, Firebase, menu init)
+│   ├── config.py               # Settings from environment
+│   ├── cache.py                # Async Redis helpers
+│   ├── firebase.py             # Firebase Admin + Firestore async client
+│   ├── database.py             # SQLAlchemy async scaffold (unused by main today)
+│   ├── constants.py            # Shared constants (includes legacy menu map for seed script)
+│   ├── menu/
+│   │   ├── loader.py           # inventory.json → in-memory menu + pricing / modifiers
+│   │   ├── router.py           # POST /menu/ingest
+│   │   ├── sync.py             # Firestore write path
+│   │   └── …
+│   └── chatbot/
+│       ├── router.py           # /api/bot/*
+│       ├── infrastructure/     # ChatReplyService, history summarization
+│       ├── intent/             # Conversation-level intent
+│       ├── visibility/         # Non-order replies + StateHandlerFactory
+│       ├── cart/               # Food order pipeline
+│       ├── extraction/         # Structured extraction from user text
+│       ├── clarification/      # Fuzzy menu matching + merge/remove builders
+│       ├── gemini_client.py    # Shared Gemini calls
+│       ├── schema.py           # Request/response Pydantic models
+│       └── …
+├── templates/index.html
 ├── tests/
-├── pyproject.toml            # Dependencies + project metadata (uv)
+├── pyproject.toml
 ├── alembic.ini
-└── .env                      # Local environment variables (do not commit)
+└── .env                        # Local secrets (do not commit)
 ```
 
 ---
 
-## Development Commands
+## Development commands
 
 ```bash
-# Run dev server
+# Dev server
 uvicorn src.main:app --reload
 
-# Seed menu and restaurant data into Redis
-python scripts/seed_menu.py
-
-# Lint
+# Lint / format
 ruff check .
-
-# Lint and auto-fix
 ruff check --fix .
-
-# Format
 ruff format .
 
-# Run tests
+# Tests
 pytest
 
-# Scaffold a new app module under src/
+# Scaffold a new feature module
 python scripts/create_app.py <module_name>
 
-# Database migrations (if wiring up SQLAlchemy models)
+# Alembic (once models and env are wired to a real DATABASE_URL)
 alembic revision --autogenerate -m "description"
 alembic upgrade head
 alembic downgrade -1
