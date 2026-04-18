@@ -252,7 +252,10 @@ async def find_closest_menu_items(
 
 
 def _get_local_item(name: str, items_by_name: dict) -> dict | None:
-    return items_by_name.get(name.lower().strip())
+    value = items_by_name.get(name.lower().strip())
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
 
 
 def _item_modifier_groups(item_row: dict) -> list[dict]:
@@ -381,60 +384,118 @@ async def check_item_availability(
         - ``Available`` False → tell the guest the item cannot be ordered and surface ``unavailableReason``.
         - ``itemName`` empty and reason is ``item not found on menu`` → refresh menu context or spelling.
     """
+    print(
+        "[check_item_availability] start "
+        f"item_id={item_id!r} merchant_id={merchant_id!r}"
+    )
     db = _firebase.firebaseDatabase
     creds = await prepare_clover_data(db, settings)
 
     menu_items = await _menu_items_cached_or_fresh(creds)
-    row = menu_items.get("by_id", {}).get(item_id)
-    print(f"row={row}")
+    by_id = menu_items.get("by_id", {})
+    print(
+        "[check_item_availability] menu loaded "
+        f"by_id_count={len(by_id)}"
+    )
+    row = by_id.get(item_id)
+    row_name = row.get("name") if row else None
+    row_avail = row.get("available") if row else None
+    print(
+        "[check_item_availability] row lookup "
+        f"found={row is not None} name={row_name!r} available_field={row_avail!r}"
+    )
 
     if not row:
+        print("[check_item_availability] return not_found")
         return _item_not_found_result(item_id)
 
-    return _availability_result(
+    out = _availability_result(
         available=True,
         item_id=item_id,
         item_name=str(row.get("name", "")),
         unavailable_reason=None,
     )
+    print(f"[check_item_availability] return available result={out!r}")
+    return out
 
 
 async def get_item_details(
     item_id: str,
     merchant_id: str | None = None,  # noqa: ARG001 — reserved for future multi-tenant routing
 ) -> dict:
-    """Return display details for a single menu item by Clover UUID.
+    """Return display details for one resolved Clover menu item.
+
+    Use this after the agent has already resolved an exact ``item_id`` and needs
+    customer-facing item details for a menu question or follow-up explanation.
+    Reads the cached normalized menu when possible.
 
     Args:
-        item_id:     Clover item UUID exactly as returned on menu rows.
-        merchant_id: Reserved for future multi-tenant routing; currently unused.
+        item_id: Clover item UUID exactly as returned on menu rows.
+        merchant_id: Merchant id for the current execution context. When provided
+            and it does not match the resolved Clover merchant, the tool fails closed.
 
     Returns a dict:
 
-        id (str | None)            — Clover item UUID.
-        name (str | None)          — Display name.
-        description (str | None)   — Alternate / description text.
-        price (int | None)         — Price in cents.
-        modifier_groups (list)     — Modifier group definitions attached to this item.
-        categories (dict | None)   — Category membership from Clover.
-        available (bool | None)    — Whether the item is currently orderable.
+        id (str | None)
+            Clover item UUID when found.
+
+        name (str | None)
+            Display name when found.
+
+        description (str | None)
+            Alternate / description text when present.
+
+        price (int | None)
+            Price in cents when present.
+
+        modifier_groups (list)
+            Modifier group definitions attached to this item.
+
+        categories (dict | None)
+            Category membership from Clover.
+
+        available (bool | None)
+            Whether the item is currently orderable.
 
     Decision guide for the agent:
-        - ``available`` True (or None)  → item can be added to the order.
-        - ``available`` False           → item is not orderable; tell the guest.
-        - All fields None / empty dict  → item not found; check the id or refresh the menu.
+        - ``available`` False with empty / missing fields → treat as unavailable or unresolved.
+        - ``available`` True or None → use name / price / description to answer the menu question.
+        - Empty / missing values → ask the customer to clarify the item.
     """
+    print(
+        "[getItemDetails] start "
+        f"item_id={item_id!r} merchant_id={merchant_id!r}"
+    )
     db = _firebase.firebaseDatabase
     creds = await prepare_clover_data(db, settings)
+    print(
+        "[getItemDetails] after prepare_clover_data "
+        f"creds_merchant_id={creds.get('merchant_id')!r}"
+    )
+
+    if merchant_id is not None and merchant_id != creds.get("merchant_id"):
+        result = {"available": False}
+        print(
+            "[getItemDetails] return merchant_mismatch "
+            f"result={result!r}"
+        )
+        return result
 
     menu_items = await _menu_items_cached_or_fresh(creds)
-    row = menu_items.get("by_id", {}).get(item_id)
-    print(f"row={row}")
+    by_id = menu_items.get("by_id", {})
+    print("[getItemDetails] menu loaded " f"by_id_count={len(by_id)}")
+    row = by_id.get(item_id)
+    print(
+        "[getItemDetails] row lookup "
+        f"found={row is not None} name={(row.get('name') if row else None)!r}"
+    )
 
     if not row:
-        return {"available": False}
+        result = {"available": False}
+        print(f"[getItemDetails] return not_found result={result!r}")
+        return result
 
-    return {
+    result = {
         "id": row.get("id"),
         "name": row.get("name"),
         "description": row.get("alternateName"),
@@ -443,6 +504,8 @@ async def get_item_details(
         "categories": row.get("categories"),
         "available": row.get("available"),
     }
+    print(f"[getItemDetails] result={result!r}")
+    return result
 
 
 def _flatten_item_modifier_options(item_row: dict) -> list[dict]:
@@ -698,9 +761,14 @@ async def validateModifications(
 ) -> dict:
     """Validate raw requested modifications against one resolved Clover item.
 
+    Use this when the execution agent already knows the concrete menu ``itemId``
+    and wants to check whether one or more free-text modifier phrases can be
+    safely converted into real Clover modifier ids before mutating the order.
+
     Args:
         itemId: Clover item UUID already resolved for the current order item.
-        merchantId: Merchant id expected by the caller; validation fails closed on mismatch.
+        merchantId: Merchant id expected by the caller; validation fails closed
+            when it does not match the resolved Clover merchant.
         requestedModifications: Raw modifier strings extracted from the guest message.
 
     Returns a dict with:
@@ -708,34 +776,77 @@ async def validateModifications(
         invalid: raw modifier strings that could not be matched for this item.
         requireChoice: required modifier groups still missing one or more selections.
         allValid: True only when every non-empty request matched and no required group is missing.
+
+    Decision guide for the agent:
+        - ``allValid`` True with one clear ``valid`` row → safe to apply that modifier.
+        - Non-empty ``invalid`` or ``requireChoice`` → ask the customer to clarify.
+        - Empty ``valid`` with all requested values in ``invalid`` → fail closed; do not mutate the order.
     """
     requested = [
         str(value).strip()
         for value in (requestedModifications or [])
         if str(value).strip()
     ]
+    print(
+        "[validateModifications] start "
+        f"itemId={itemId!r} merchantId={merchantId!r} requested={requested!r}"
+    )
 
     db = _firebase.firebaseDatabase
     creds = await prepare_clover_data(db, settings)
+    print(
+        "[validateModifications] after prepare_clover_data "
+        f"creds_merchant_id={creds.get('merchant_id')!r}"
+    )
+
+    if merchantId != creds.get("merchant_id"):
+        result = _failed_modifier_validation_result(requested)
+        print(
+            "[validateModifications] return merchant_mismatch "
+            f"result={result!r}"
+        )
+        return result
 
     menu_items = await _menu_items_cached_or_fresh(creds)
+    print(
+        "[validateModifications] menu loaded "
+        f"by_id_count={len(menu_items.get('by_id', {}))}"
+    )
     item_row = menu_items.get("by_id", {}).get(itemId)
     if not item_row:
-        return _failed_modifier_validation_result(requested)
+        result = _failed_modifier_validation_result(requested)
+        print(f"[validateModifications] return item_missing result={result!r}")
+        return result
 
     flattened_options = _flatten_item_modifier_options(item_row)
+    print(
+        "[validateModifications] flattened options "
+        f"count={len(flattened_options)}"
+    )
     valid: list[dict] = []
     invalid: list[str] = []
     selected_keys: set[tuple[str, str]] = set()
 
     for raw_modification in requested:
+        print(
+            "[validateModifications] checking modification "
+            f"raw={raw_modification!r}"
+        )
         match = _match_requested_modifier(raw_modification, flattened_options)
         if match is None:
             invalid.append(raw_modification)
+            print(
+                "[validateModifications] no match "
+                f"raw={raw_modification!r}"
+            )
             continue
 
         selection_key = (match["groupId"], match["modifierId"])
         if selection_key in selected_keys:
+            print(
+                "[validateModifications] duplicate match skipped "
+                f"selection_key={selection_key!r}"
+            )
             continue
 
         selected_keys.add(selection_key)
@@ -751,12 +862,14 @@ async def validateModifications(
         )
 
     require_choice = _required_modifier_groups(item_row, selected_keys)
-    return {
+    result = {
         "valid": valid,
         "invalid": invalid,
         "requireChoice": require_choice,
         "allValid": not invalid and not require_choice,
     }
+    print(f"[validateModifications] result={result!r}")
+    return result
 
 
 async def checkIfModifierOrAddOn(
@@ -764,7 +877,11 @@ async def checkIfModifierOrAddOn(
     merchantId: str,
     requestedModification: str,
 ) -> dict:
-    """Classify whether a free-text modification is a variation of an existing modifier.
+    """Classify whether a free-text modification maps to a modifier or a note.
+
+    Use this after exact modifier validation fails but the execution agent still
+    needs to decide whether a free-text change should become a related note or
+    a best-effort modifier attachment for one resolved menu item.
 
     Returns a dict with:
         isAddon: True when the request conceptually relates to one existing modifier.
@@ -772,27 +889,64 @@ async def checkIfModifierOrAddOn(
             or not_addon.
         closestModifier: The closest existing modifier reference with modifierId and name.
         suggestedNote: Cleaned note text when the request is related but not an exact modifier.
+
+    Decision guide for the agent:
+        - ``isAddon`` True with ``suggestedNote`` → safe to update the line-item note.
+        - ``isAddon`` True with only ``closestModifier`` → optionally attach that modifier.
+        - ``isAddon`` False → fail closed and ask the customer to clarify.
     """
     requested = _clean_modifier_request(requestedModification)
+    print(
+        "[checkIfModifierOrAddOn] start "
+        f"itemId={itemId!r} merchantId={merchantId!r} requested={requested!r}"
+    )
     if not requested:
-        return _modifier_or_addon_negative_result()
+        result = _modifier_or_addon_negative_result()
+        print(f"[checkIfModifierOrAddOn] return empty_request result={result!r}")
+        return result
 
     db = _firebase.firebaseDatabase
     creds = await prepare_clover_data(db, settings)
+    print(
+        "[checkIfModifierOrAddOn] after prepare_clover_data "
+        f"creds_merchant_id={creds.get('merchant_id')!r}"
+    )
+
+    if merchantId != creds.get("merchant_id"):
+        result = _modifier_or_addon_negative_result()
+        print(
+            "[checkIfModifierOrAddOn] return merchant_mismatch "
+            f"result={result!r}"
+        )
+        return result
 
     menu_items = await _menu_items_cached_or_fresh(creds)
+    print(
+        "[checkIfModifierOrAddOn] menu loaded "
+        f"by_id_count={len(menu_items.get('by_id', {}))}"
+    )
     item_row = menu_items.get("by_id", {}).get(itemId)
     if not item_row:
-        return _modifier_or_addon_negative_result()
+        result = _modifier_or_addon_negative_result()
+        print(f"[checkIfModifierOrAddOn] return item_missing result={result!r}")
+        return result
 
     modifier_groups = _item_modifier_groups(item_row)
     flattened_options = _flatten_item_modifier_options(item_row)
     if not flattened_options:
-        return _modifier_or_addon_negative_result()
+        result = _modifier_or_addon_negative_result()
+        print(f"[checkIfModifierOrAddOn] return no_options result={result!r}")
+        return result
 
     candidates = _modifier_or_addon_candidates(requested, flattened_options)
+    print(
+        "[checkIfModifierOrAddOn] candidate search "
+        f"candidate_count={len(candidates)}"
+    )
     if not candidates:
-        return _modifier_or_addon_negative_result()
+        result = _modifier_or_addon_negative_result()
+        print(f"[checkIfModifierOrAddOn] return no_candidates result={result!r}")
+        return result
 
     try:
         classification_result = await classify_modifier_or_addon_request(
@@ -805,11 +959,13 @@ async def checkIfModifierOrAddOn(
         print(f"[checkIfModifierOrAddOn] classification_failed: {exc}")
         return _modifier_or_addon_negative_result()
 
-    return _validated_modifier_or_addon_result(
+    result = _validated_modifier_or_addon_result(
         classification_result,
         requested,
         flattened_options,
     )
+    print(f"[checkIfModifierOrAddOn] result={result!r}")
+    return result
 
 
 async def addItemsToOrder(session_id: str, items: list[dict] | None = None) -> dict:
@@ -1058,9 +1214,10 @@ async def replaceItemInOrder(
 ) -> dict:
     """Swap an already-ordered line item for a different menu item.
 
-    Use this when the customer wants to change one item to another (e.g. "swap my
-    fries for onion rings"). Always confirm the replacement with the customer before
-    calling this tool.
+    Use this when the execution agent has already resolved the replacement to a
+    concrete Clover ``itemId`` and needs to swap one current order line item for
+    another (for example, "swap my fries for onion rings"). Always confirm the
+    replacement with the customer before calling this tool.
 
     Target resolution (in priority order):
         1. ``lineItemId`` provided  → use directly; fail if not in current order.
@@ -1780,7 +1937,11 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int) ->
 
 
 async def updateItemInOrder(session_id: str, target: dict, updates: dict) -> dict:
-    """Update modifiers and/or note for an existing line item in the customer's order.
+    """Update modifiers and/or the note for one existing order line item.
+
+    Use this when the execution agent already knows which current order item to
+    change and has resolved one safe mutation to apply, such as adding a modifier,
+    removing a modifier, or writing a line-item note.
 
     Target resolution (in priority order):
         1. ``target["lineitemId"]`` or ``target["lineItemId"]`` provided → exact current line item id.
@@ -1791,6 +1952,28 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict) -> dic
         - ``addModifiers`` (list[str])      — modifier ids to add
         - ``removeModifiers`` (list[str])   — modifier ids to remove
         - ``note`` (str | None)             — set note when string, clear it when explicitly null
+
+    Returns a dict:
+
+        success (bool)
+            True when the requested change was applied, or when no-op success is valid.
+
+        itemName (str)
+            The resolved current line-item name.
+
+        appliedChanges (str)
+            Human-readable summary of what changed.
+
+        updatedOrderTotal (int)
+            Current order total in cents after the change.
+
+        error (str | None)
+            Human-readable error message when ``success`` is False.
+
+    Decision guide for the agent:
+        - ``success`` True → confirm the item was updated.
+        - ``success`` False with target-resolution errors → ask the customer which current item they meant.
+        - ``success`` False with modifier / note mutation errors → surface the error and avoid assuming the change succeeded.
     """
     print(
         f"[updateItemInOrder] session_id={session_id!r} target={target} updates={updates}"
@@ -2068,7 +2251,38 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict) -> dic
 
 
 async def calcOrderPrice(session_id: str) -> dict:
-    """Return a Clover-calculated price breakdown for the current session order."""
+    """Return the current Clover-backed price breakdown for the session order.
+
+    Use this before confirming an order or when the execution agent needs an
+    authoritative subtotal / tax / total for the customer's current cart.
+
+    Returns a dict:
+
+        success (bool)
+            True when pricing was calculated successfully.
+
+        lineItems (list[dict])
+            Current line-item pricing breakdown, including modifier prices.
+
+        subtotal (int)
+            Current order subtotal in cents.
+
+        tax (int)
+            Current order tax in cents.
+
+        total (int)
+            Current order total in cents.
+
+        currency (str)
+            Currency code, defaulting to ``USD``.
+
+        error (str | None)
+            Human-readable error message when ``success`` is False.
+
+    Decision guide for the agent:
+        - ``success`` True → use the totals as the source of truth for confirmation or price replies.
+        - ``success`` False → tell the customer pricing could not be calculated right now.
+    """
     print(f"[calcOrderPrice] session_id={session_id!r}")
 
     order_id = await cache_get(_session_clover_order_redis_key(session_id))
@@ -2699,6 +2913,230 @@ async def _cli_update_item_in_order(ns: argparse.Namespace) -> dict:
     return await updateItemInOrder(ns.session_id, target, updates)
 
 
+async def getMenuLink(session_id: str, merchant_id: str, creds: dict | None = None) -> dict:
+    """Return a shareable menu URL for the merchant.
+
+    Call this when the customer asks to see the full menu. Returns a URL they can open
+    in their browser to browse all available items.
+
+    Args:
+        session_id: The chat session identifier. Used for logging/context.
+        merchant_id: The Clover merchant id for this restaurant.
+        creds: Clover credentials dict (may contain a ``menu_url`` key). Pass None
+            if credentials are not available — an error will be returned.
+
+    Returns a dict:
+        success (bool)
+            True when a menu URL was found.
+        menu_url (str | None)
+            The shareable URL, or None when not configured.
+        error (str | None)
+            Human-readable reason for failure, or None on success.
+
+    Decision guide for the agent:
+        - ``success`` True with ``menu_url`` → send the URL to the customer.
+        - ``success`` False → inform customer that a menu link is not available.
+    """
+    print(f"[getMenuLink] session_id={session_id!r} merchant_id={merchant_id!r}")
+    if creds is None:
+        print("[getMenuLink] no creds available")
+        return {"success": False, "menu_url": None, "error": "Credentials unavailable."}
+
+    menu_url = creds.get("menu_url") or None
+    if not menu_url:
+        print("[getMenuLink] no menu_url in creds")
+        return {"success": False, "menu_url": None, "error": "Menu link not configured."}
+
+    print(f"[getMenuLink] menu_url={menu_url!r}")
+    return {"success": True, "menu_url": str(menu_url), "error": None}
+
+
+async def getItemsNotAvailableToday(merchant_id: str, creds: dict | None = None) -> dict:
+    """Return a list of menu items that are currently unavailable.
+
+    Call this when the customer asks what is off today or what items cannot be ordered.
+    Scans the cached menu and returns items where ``available`` is False.
+
+    Args:
+        merchant_id: The Clover merchant id used to look up the menu cache.
+        creds: Clover credentials dict required to fetch a fresh menu if the cache
+            is stale. Pass None if credentials are not available.
+
+    Returns a dict:
+        success (bool)
+            True when the menu was loaded successfully.
+        unavailable_items (list[dict])
+            Each entry: ``{"id": str, "name": str}``. Empty list when all items are available.
+        error (str | None)
+            Human-readable reason for failure, or None on success.
+
+    Decision guide for the agent:
+        - ``success`` True, empty ``unavailable_items`` → tell customer everything is available.
+        - ``success`` True, non-empty list → read out the unavailable item names.
+        - ``success`` False → inform customer you couldn't load menu availability.
+    """
+    print(f"[getItemsNotAvailableToday] merchant_id={merchant_id!r}")
+    if creds is None:
+        print("[getItemsNotAvailableToday] no creds available")
+        return {"success": False, "unavailable_items": [], "error": "Credentials unavailable."}
+
+    try:
+        menu_items = await _menu_items_cached_or_fresh(creds)
+    except Exception as exc:
+        print(f"[getItemsNotAvailableToday] failed to load menu: {exc!r}")
+        return {"success": False, "unavailable_items": [], "error": str(exc)}
+
+    unavailable: list[dict] = []
+    for item_id, item in menu_items.get("by_id", {}).items():
+        if not item.get("available", True):
+            unavailable.append({"id": str(item_id), "name": str(item.get("name", ""))})
+
+    print(f"[getItemsNotAvailableToday] found {len(unavailable)} unavailable items")
+    return {"success": True, "unavailable_items": unavailable, "error": None}
+
+
+async def humanInterventionNeeded(session_id: str, reason: str) -> dict:
+    """Flag a session for human review and store the escalation reason in Redis.
+
+    Call this when the customer's intent is ``escalation`` or when the situation
+    cannot be resolved automatically (e.g., repeated failures, complaints, or
+    requests outside system capability).
+
+    Args:
+        session_id: The chat session identifier used to store the escalation flag.
+        reason: A short plain-text description of why human intervention is needed.
+            Do not include customer PII.
+
+    Returns a dict:
+        success (bool)
+            True when the escalation was recorded.
+        escalated (bool)
+            True when the flag was written to Redis successfully.
+        error (str | None)
+            Human-readable reason for failure, or None on success.
+
+    Decision guide for the agent:
+        - ``success`` True → tell the customer a team member will follow up.
+        - ``success`` False → still inform the customer and advise them to call the store.
+    """
+    print(f"[humanInterventionNeeded] session_id={session_id!r} reason={reason!r}")
+    escalation_key = f"escalation:{session_id}"
+    try:
+        payload = json.dumps({"reason": reason, "timestamp": datetime.now(timezone.utc).isoformat()})
+        await cache_set(escalation_key, payload, ttl=_SESSION_CLOVER_ORDER_REDIS_TTL_SECONDS)
+        print(f"[humanInterventionNeeded] escalation recorded key={escalation_key!r}")
+        return {"success": True, "escalated": True, "error": None}
+    except Exception as exc:
+        print(f"[humanInterventionNeeded] failed: {exc!r}")
+        return {"success": False, "escalated": False, "error": str(exc)}
+
+
+async def getPreviousOrdersDetails(session_id: str, limit: int = 3) -> dict:
+    """Retrieve stored order history for a session from Redis.
+
+    Call this when the customer asks about their past orders or wants to reorder.
+    Reads order history entries stored under the session's order history key.
+
+    Args:
+        session_id: The chat session identifier used to look up order history.
+        limit: Maximum number of past orders to return. Defaults to 3.
+            Pass a larger number only when the customer explicitly asks for more history.
+
+    Returns a dict:
+        success (bool)
+            True when history was read (even if empty).
+        orders (list[dict])
+            Each entry: ``{"order_id": str, "items": list, "total": int, "timestamp": str}``.
+            Empty list when no history exists.
+        error (str | None)
+            Human-readable reason for failure, or None on success.
+
+    Decision guide for the agent:
+        - ``success`` True, non-empty ``orders`` → summarize the most recent orders for the customer.
+        - ``success`` True, empty ``orders`` → tell customer no previous orders were found.
+        - ``success`` False → inform customer you couldn't load order history.
+    """
+    print(f"[getPreviousOrdersDetails] session_id={session_id!r} limit={limit!r}")
+    history_key = f"order_history:{session_id}"
+    try:
+        safe_limit = max(1, int(limit or 3))
+        raw_entries = await cache_list_range(history_key, 0, safe_limit - 1)
+        orders: list[dict] = []
+        for entry in raw_entries:
+            try:
+                orders.append(json.loads(entry))
+            except Exception:
+                pass
+        print(f"[getPreviousOrdersDetails] found {len(orders)} orders")
+        return {"success": True, "orders": orders, "error": None}
+    except Exception as exc:
+        print(f"[getPreviousOrdersDetails] failed: {exc!r}")
+        return {"success": False, "orders": [], "error": str(exc)}
+
+
+async def requestPickupTime(session_id: str, requested_time: str | None = None) -> dict:
+    """Store or retrieve a pickup time preference for the session.
+
+    Call this when the customer asks about pickup time or wants to set a specific pickup time.
+    If ``requested_time`` is provided, the preference is stored. If omitted, any existing
+    preference is returned.
+
+    Args:
+        session_id: The chat session identifier.
+        requested_time: A free-text pickup time string from the customer (e.g., "12:30pm",
+            "30 minutes"). Pass None or omit to only read any existing preference.
+
+    Returns a dict:
+        success (bool)
+            True when the operation completed without error.
+        estimated_minutes (int | None)
+            Estimated wait time in minutes, or None when not available.
+        confirmed_time (str | None)
+            The stored pickup time string, or None when no preference has been set.
+        error (str | None)
+            Human-readable reason for failure, or None on success.
+
+    Decision guide for the agent:
+        - ``success`` True with ``confirmed_time`` → relay the time to the customer.
+        - ``success`` True without ``confirmed_time`` → tell customer no specific time is set.
+        - ``success`` False → inform customer you couldn't process their pickup time request.
+    """
+    print(f"[requestPickupTime] session_id={session_id!r} requested_time={requested_time!r}")
+    pickup_key = f"pickup_time:{session_id}"
+    try:
+        if requested_time:
+            payload = json.dumps({
+                "requested_time": requested_time,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            await cache_set(pickup_key, payload, ttl=_SESSION_CLOVER_ORDER_REDIS_TTL_SECONDS)
+            print(f"[requestPickupTime] stored requested_time={requested_time!r}")
+            return {
+                "success": True,
+                "estimated_minutes": None,
+                "confirmed_time": requested_time,
+                "error": None,
+            }
+
+        existing = await cache_get(pickup_key)
+        if existing:
+            data = json.loads(existing)
+            confirmed = data.get("requested_time")
+            print(f"[requestPickupTime] retrieved confirmed_time={confirmed!r}")
+            return {
+                "success": True,
+                "estimated_minutes": None,
+                "confirmed_time": confirmed,
+                "error": None,
+            }
+
+        print("[requestPickupTime] no existing pickup time")
+        return {"success": True, "estimated_minutes": None, "confirmed_time": None, "error": None}
+    except Exception as exc:
+        print(f"[requestPickupTime] failed: {exc!r}")
+        return {"success": False, "estimated_minutes": None, "confirmed_time": None, "error": str(exc)}
+
+
 def _cli_handlers() -> dict[str, CliHandler]:
     return {
         "find-closest": _cli_find_closest,
@@ -3058,8 +3496,11 @@ def _build_cli_parser(handlers: dict[str, CliHandler]) -> argparse.ArgumentParse
 
 
 async def _cli_main(args: argparse.Namespace) -> int:
-    if not settings.MERCHANT_ID:
-        print("MERCHANT_ID must be set in the environment.", file=sys.stderr)
+    if not str(settings.RESTAURANT_ID).strip():
+        print(
+            "RESTAURANT_ID must be set in the environment (Firebase Users doc id for Clover).",
+            file=sys.stderr,
+        )
         return 1
 
     handlers = _cli_handlers()

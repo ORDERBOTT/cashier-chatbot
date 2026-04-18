@@ -512,11 +512,8 @@
 
 <script>
   const USER_ID = "1";
-
-  let messageHistory = [];
-  let orderState = null;
-  let previousState = null;
-  let awaitingOrderConfirmation = false;
+  const SESSION_ID = "1";
+  const MERCHANT_ID = "1";
 
   const messagesEl        = document.getElementById("messages");
   const inputEl           = document.getElementById("user-input");
@@ -691,18 +688,15 @@
     appendMessage("user", text);
 
     const body = {
-      user_id: USER_ID,
-      latest_message: text,
-      message_history: messageHistory.length ? messageHistory : null,
-      order_state: orderState,
-      previous_state: previousState,
-      awaiting_order_confirmation: awaitingOrderConfirmation,
+      user_message: text,
+      session_id: SESSION_ID,
+      merchant_id: MERCHANT_ID,
     };
 
     showTyping();
 
     try {
-      const res = await fetch("/api/bot/message", {
+      const res = await fetch("/chatbot/v2/message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -718,29 +712,7 @@
 
       const data = await res.json();
 
-      appendMessage("bot", data.chatbot_message, data.pickup_ping);
-
-      // Update order state only if the response contains one
-      if (data.order_state !== undefined && data.order_state !== null) {
-        orderState = data.order_state;
-      }
-      if (data.previous_state !== undefined && data.previous_state !== null) {
-        previousState = data.previous_state;
-      }
-      awaitingOrderConfirmation = data.awaiting_order_confirmation ?? false;
-      renderOrderState(orderState);
-
-      if (data.pickup_ping) {
-        showPickupModal(orderState);
-      }
-
-      if (data.ping_for_human) {
-        humanOverlay.classList.add("active");
-      }
-
-      // Push both turns into history
-      messageHistory.push({ role: "user", content: text });
-      messageHistory.push({ role: "assistant", content: data.chatbot_message });
+      appendMessage("bot", data.system_response);
 
     } catch (e) {
       hideTyping();
@@ -754,10 +726,6 @@
   // ── Clear ──────────────────────────────────────────────────────
 
   clearBtn.addEventListener("click", () => {
-    messageHistory = [];
-    orderState = null;
-    previousState = null;
-    awaitingOrderConfirmation = false;
     messagesEl.innerHTML = "";
     renderOrderState(null);
     document.getElementById("expected-section").style.display = "none";
@@ -798,18 +766,15 @@
     appendMessage("user", text);
 
     const body = {
-      user_id: USER_ID,
-      latest_message: text,
-      message_history: messageHistory.length ? messageHistory : null,
-      order_state: orderState,
-      previous_state: previousState,
-      awaiting_order_confirmation: awaitingOrderConfirmation,
+      user_message: text,
+      session_id: SESSION_ID,
+      merchant_id: MERCHANT_ID,
     };
 
     showTyping();
 
     try {
-      const res = await fetch("/api/bot/message", {
+      const res = await fetch("/chatbot/v2/message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -825,22 +790,7 @@
 
       const data = await res.json();
 
-      appendMessage("bot", data.chatbot_message, data.pickup_ping);
-
-      if (data.order_state !== undefined && data.order_state !== null) {
-        orderState = data.order_state;
-      }
-      if (data.previous_state !== undefined && data.previous_state !== null) {
-        previousState = data.previous_state;
-      }
-      awaitingOrderConfirmation = data.awaiting_order_confirmation ?? false;
-      renderOrderState(orderState);
-
-      if (data.pickup_ping) showPickupModal(orderState);
-      if (data.ping_for_human) humanOverlay.classList.add("active");
-
-      messageHistory.push({ role: "user", content: text });
-      messageHistory.push({ role: "assistant", content: data.chatbot_message });
+      appendMessage("bot", data.system_response);
 
     } catch (e) {
       hideTyping();
@@ -854,11 +804,6 @@
   async function runTestScript() {
     runTestsBtn.disabled = true;
 
-    // Clear chat state
-    messageHistory = [];
-    orderState = null;
-    previousState = null;
-    awaitingOrderConfirmation = false;
     messagesEl.innerHTML = "";
     renderOrderState(null);
     document.getElementById("expected-section").style.display = "block";

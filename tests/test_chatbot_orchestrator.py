@@ -59,23 +59,11 @@ class _FakeExecutionAgent:
     def __init__(self, events: list[tuple]):
         self.events = events
 
-    def build_tools(self, runtime):
-        self.events.append(
-            (
-                "tools",
-                runtime.context.session_id,
-                runtime.context.merchant_id,
-                runtime.context.clover_creds.get("merchant_id"),
-            )
-        )
-        return []
-
     async def run(
         self,
         *,
         parsed_requests: ParsedRequestsPayload,
         context_object,
-        tools,
     ) -> ExecutionAgentResult:
         self.events.append(
             (
@@ -88,7 +76,6 @@ class _FakeExecutionAgent:
                 context_object.current_order_details.order_id,
                 tuple(context_object.latest_k_messages_by_customer),
                 context_object.summary_of_messages_before_k_by_customer,
-                tools,
             )
         )
         return ExecutionAgentResult(
@@ -176,6 +163,11 @@ def test_orchestrator_builds_server_side_context_and_calls_agents_in_order(monke
             0, result={"merchant_id": "merchant-from-creds", "token": "secret"}
         ),
     )
+    monkeypatch.setattr(
+        orchestrator_mod,
+        "cache_list_append",
+        lambda key, value: asyncio.sleep(0),
+    )
 
     response = asyncio.run(
         orchestrator.handle_message(
@@ -198,12 +190,6 @@ def test_orchestrator_builds_server_side_context_and_calls_agents_in_order(monke
             "merchant-456",
         ),
         (
-            "tools",
-            "session-123",
-            "merchant-from-creds",
-            "merchant-from-creds",
-        ),
-        (
             "execution",
             1,
             ParsedRequestIntent.ADD_ITEM,
@@ -213,7 +199,6 @@ def test_orchestrator_builds_server_side_context_and_calls_agents_in_order(monke
             "order-7",
             ("first message", "second message"),
             "older summary",
-            [],
         ),
     ]
     assert response.system_response == "stubbed system response"

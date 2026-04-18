@@ -14,9 +14,9 @@ class Config(BaseSettings):
     GEMINI_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
     GEMINI_MODEL: str = "gemini-3-flash-preview"
-    PARSING_AGENT_GEMINI_MODEL: str = "gemini-3-pro"
+    PARSING_AGENT_GEMINI_MODEL: str = "gemini-3.1-pro-preview"
     EXECUTION_AGENT_GEMINI_MODEL: str = "gemini-3-flash-preview"
-    EXECUTION_AGENT_MAX_TOOL_CALLS: int = 4
+    EXECUTION_AGENT_MAX_TOOL_CALLS: int = 12
     REDIS_URL: RedisDsn
     FIREBASE_PROJECT_ID: str
     FIREBASE_CLIENT_EMAIL: str

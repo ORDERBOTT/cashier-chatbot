@@ -294,7 +294,7 @@ async def init_menu() -> None:
     """Load the in-memory menu used by cart, pricing, and prompts.
 
     Order: optional ``CLOVER_MENU_JSON_PATH`` file (local/tests), else Clover API
-    using ``Users/{USER_ID}/Integrations/Clover`` in Firestore. On missing
+    using ``Users/{RESTAURANT_ID}/Integrations/Clover`` in Firestore. On missing
     credentials or errors, the menu starts empty and the app still boots.
     """
     bootstrap = os.environ.get("CLOVER_MENU_JSON_PATH")
@@ -310,9 +310,9 @@ async def init_menu() -> None:
         _hydrate_menu_from_raw({"items": {"elements": []}, "modifierGroups": {"elements": []}})
         return
 
-    if not settings.USER_ID:
+    if not str(settings.RESTAURANT_ID).strip():
         print(
-            "init_menu: USER_ID unset; menu empty "
+            "init_menu: RESTAURANT_ID unset; menu empty "
             "(configure Firestore Clover integration or set CLOVER_MENU_JSON_PATH)"
         )
         _hydrate_menu_from_raw({"items": {"elements": []}, "modifierGroups": {"elements": []}})
@@ -321,7 +321,7 @@ async def init_menu() -> None:
     try:
         doc = await (
             db.collection("Users")
-            .document(settings.USER_ID)
+            .document(settings.RESTAURANT_ID)
             .collection("Integrations")
             .document("Clover")
             .get()

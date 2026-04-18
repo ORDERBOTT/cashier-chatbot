@@ -1,17 +1,17 @@
 """
 Build name -> POS id maps from data/inventory.json and write them to Firestore.
 
-Before writing, all documents under Users/{USER_ID}/InventoryIdMaps are deleted,
+Before writing, all documents under Users/{RESTAURANT_ID}/InventoryIdMaps are deleted,
 then recreated (currently a single `default` document).
 
 Maps are stored at:
-  Users/{USER_ID}/InventoryIdMaps/default
+  Users/{RESTAURANT_ID}/InventoryIdMaps/default
 
 Fields:
   - items, categories, modifier_groups: flat display name -> id
   - modifiers_by_group: modifier group name -> { modifier name -> modifier id }
 
-Requires USER_ID and Firebase credentials in .env (see src.config.Config).
+Requires RESTAURANT_ID and Firebase credentials in .env (see src.config.Config).
 
 Usage:
   uv run python scripts/sync_inventory_id_maps.py
@@ -108,8 +108,10 @@ def build_maps_from_inventory(
 
 
 async def main() -> None:
-    if not settings.USER_ID:
-        sys.exit("USER_ID must be set in .env for Firestore path Users/{USER_ID}/...")
+    if not str(settings.RESTAURANT_ID).strip():
+        sys.exit(
+            "RESTAURANT_ID must be set in .env for Firestore path Users/{RESTAURANT_ID}/..."
+        )
 
     if not INVENTORY_PATH.is_file():
         sys.exit(f"Missing inventory file: {INVENTORY_PATH}")
@@ -135,7 +137,7 @@ async def main() -> None:
         sys.exit("Firebase client not initialized")
 
     collection_ref = (
-        db.collection("Users").document(settings.USER_ID).collection("InventoryIdMaps")
+        db.collection("Users").document(settings.RESTAURANT_ID).collection("InventoryIdMaps")
     )
     existing = await collection_ref.get()
     for doc_snap in existing:
@@ -156,7 +158,7 @@ async def main() -> None:
 
     nested_mod_count = sum(len(m) for m in modifiers_by_group.values())
     print(
-        f"Wrote InventoryIdMaps/default for user {settings.USER_ID}: "
+        f"Wrote InventoryIdMaps/default for user {settings.RESTAURANT_ID}: "
         f"{len(items)} items, {len(categories)} categories, "
         f"{len(modifier_groups)} modifier groups, {nested_mod_count} modifiers nested by group"
     )

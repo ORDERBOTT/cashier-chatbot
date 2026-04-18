@@ -218,6 +218,7 @@ class PreparedExecutionContext(BaseModel):
     current_order_details: CurrentOrderDetails
     latest_k_messages_by_customer: list[str]
     summary_of_messages_before_k_by_customer: str
+    clover_creds: dict[str, Any] | None = None
     clover_error: str | None = None
 
 

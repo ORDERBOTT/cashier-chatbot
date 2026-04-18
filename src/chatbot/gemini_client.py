@@ -300,7 +300,6 @@ def _build_function_tools(
     tool_config = types.ToolConfig(
         functionCallingConfig=types.FunctionCallingConfig(
             mode=types.FunctionCallingConfigMode.AUTO,
-            allowedFunctionNames=[tool.name for tool in function_tools],
         )
     )
     return tools, tool_config

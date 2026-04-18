@@ -10,7 +10,7 @@ from src.chatbot.tools import check_item_availability
 
 def _fake_settings():
     return SimpleNamespace(
-        USER_ID="test-user-id",
+        RESTAURANT_ID="test-user-id",
         CLOVER_APP_ID=None,
         CLOVER_API_BASE_URL="https://apisandbox.dev.clover.com",
     )

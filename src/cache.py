@@ -40,3 +40,7 @@ async def cache_list_length(key: str) -> int:
 
 async def cache_list_range(key: str, start: int, end: int) -> list[str]:
     return await redis.lrange(key, start, end)
+
+
+async def cache_list_append(key: str, value: str) -> None:
+    await redis.rpush(key, value)

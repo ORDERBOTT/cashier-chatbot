@@ -79,12 +79,10 @@ def test_chatbot_v2_message_returns_minimal_contract(monkeypatch):
         *,
         parsed_requests,
         context_object,
-        tools,
     ) -> ExecutionAgentResult:
         del self
         del parsed_requests
         del context_object
-        del tools
         return ExecutionAgentResult(
             agent_reply="stubbed system response",
             session_id="session-1",
@@ -117,6 +115,11 @@ def test_chatbot_v2_message_returns_minimal_contract(monkeypatch):
     )
     monkeypatch.setattr(
         orchestrator_mod, "getOrderLineItems", _fake_get_order_line_items
+    )
+    monkeypatch.setattr(
+        orchestrator_mod,
+        "cache_list_append",
+        lambda key, value: __import__("asyncio").sleep(0),
     )
 
     response = _client().post(
