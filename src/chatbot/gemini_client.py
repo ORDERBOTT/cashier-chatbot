@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from copy import deepcopy
-from collections.abc import Sequence
-from typing import TypeVar
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Any, TypeVar
 
 from google import genai
 from google.genai import types
@@ -18,11 +19,21 @@ _client: genai.Client | None = None
 _SCHEMA_PREVIEW_LIMIT = 200
 
 
+@dataclass(frozen=True, slots=True)
+class GeminiFunctionTool:
+    name: str
+    description: str
+    parameters_json_schema: dict[str, Any]
+    handler: Callable[..., Awaitable[dict[str, Any]]]
+
+
 def _resolve_api_key() -> str:
     api_key = settings.GEMINI_API_KEY or settings.OPENAI_API_KEY
     if api_key:
         return api_key
-    raise AIServiceError("Gemini API key is not configured. Set GEMINI_API_KEY or OPENAI_API_KEY.")
+    raise AIServiceError(
+        "Gemini API key is not configured. Set GEMINI_API_KEY or OPENAI_API_KEY."
+    )
 
 
 def _get_client() -> genai.Client:
@@ -32,7 +43,9 @@ def _get_client() -> genai.Client:
     return _client
 
 
-def _build_contents(messages: Sequence[LLMMessage]) -> tuple[str | None, list[types.Content]]:
+def _build_contents(
+    messages: Sequence[LLMMessage],
+) -> tuple[str | None, list[types.Content]]:
     system_instruction, conversational_messages = split_system_instruction(messages)
     contents: list[types.Content] = []
     for message in conversational_messages:
@@ -70,7 +83,7 @@ def _resolve_json_ref(ref: str, defs: dict[str, object]) -> dict[str, object]:
     prefix = "#/$defs/"
     if not ref.startswith(prefix):
         raise ValueError(f"Unsupported JSON schema reference: {ref}")
-    key = ref[len(prefix):]
+    key = ref[len(prefix) :]
     target = defs.get(key)
     if not isinstance(target, dict):
         raise ValueError(f"Missing JSON schema definition for reference: {ref}")
@@ -99,13 +112,25 @@ def _merge_any_of_variants(variants: list[dict[str, object]]) -> dict[str, objec
                 continue
             if merged[key] == value:
                 continue
-            if key == "properties" and isinstance(merged[key], dict) and isinstance(value, dict):
+            if (
+                key == "properties"
+                and isinstance(merged[key], dict)
+                and isinstance(value, dict)
+            ):
                 merged[key] = {**merged[key], **deepcopy(value)}
                 continue
-            if key == "required" and isinstance(merged[key], list) and isinstance(value, list):
+            if (
+                key == "required"
+                and isinstance(merged[key], list)
+                and isinstance(value, list)
+            ):
                 merged[key] = list(dict.fromkeys([*merged[key], *value]))
                 continue
-            if key == "enum" and isinstance(merged[key], list) and isinstance(value, list):
+            if (
+                key == "enum"
+                and isinstance(merged[key], list)
+                and isinstance(value, list)
+            ):
                 merged[key] = list(dict.fromkeys([*merged[key], *value]))
                 continue
             if key == "additionalProperties":
@@ -144,8 +169,7 @@ def _normalize_json_schema_node(
         normalized_variants = [
             variant
             for variant in (
-                _normalize_json_schema_node(option, defs=defs)
-                for option in any_of
+                _normalize_json_schema_node(option, defs=defs) for option in any_of
             )
             if isinstance(variant, dict)
         ]
@@ -185,7 +209,9 @@ def _normalize_json_schema_node(
             normalized["prefixItems"] = _normalize_json_schema_node(value, defs=defs)
             continue
         if key == "additionalProperties" and isinstance(value, dict):
-            normalized["additionalProperties"] = _normalize_json_schema_node(value, defs=defs)
+            normalized["additionalProperties"] = _normalize_json_schema_node(
+                value, defs=defs
+            )
             continue
         normalized[key] = value
 
@@ -207,6 +233,9 @@ def _build_config(
     temperature: float,
     max_output_tokens: int | None = None,
     response_json_schema: dict | None = None,
+    tools: list[types.Tool] | None = None,
+    tool_config: types.ToolConfig | None = None,
+    automatic_function_calling: types.AutomaticFunctionCallingConfig | None = None,
 ) -> types.GenerateContentConfig:
     config: dict[str, object] = {
         "temperature": temperature,
@@ -218,6 +247,12 @@ def _build_config(
     if response_json_schema is not None:
         config["response_mime_type"] = "application/json"
         config["response_json_schema"] = response_json_schema
+    if tools is not None:
+        config["tools"] = tools
+    if tool_config is not None:
+        config["tool_config"] = tool_config
+    if automatic_function_calling is not None:
+        config["automatic_function_calling"] = automatic_function_calling
     return types.GenerateContentConfig(**config)
 
 
@@ -250,6 +285,113 @@ def _response_preview(response: object) -> str | None:
     return preview
 
 
+def _build_function_tools(
+    function_tools: Sequence[GeminiFunctionTool],
+) -> tuple[list[types.Tool], types.ToolConfig]:
+    declarations = [
+        types.FunctionDeclaration(
+            name=tool.name,
+            description=tool.description,
+            parametersJsonSchema=tool.parameters_json_schema,
+        )
+        for tool in function_tools
+    ]
+    tools = [types.Tool(functionDeclarations=declarations)]
+    tool_config = types.ToolConfig(
+        functionCallingConfig=types.FunctionCallingConfig(
+            mode=types.FunctionCallingConfigMode.AUTO,
+            allowedFunctionNames=[tool.name for tool in function_tools],
+        )
+    )
+    return tools, tool_config
+
+
+def _extract_function_calls(response: object) -> list[types.FunctionCall]:
+    direct_calls = getattr(response, "function_calls", None)
+    if isinstance(direct_calls, list) and direct_calls:
+        return [call for call in direct_calls if isinstance(call, types.FunctionCall)]
+
+    function_calls: list[types.FunctionCall] = []
+    for candidate in getattr(response, "candidates", []) or []:
+        content = getattr(candidate, "content", None)
+        if content is None:
+            continue
+        for part in getattr(content, "parts", []) or []:
+            function_call = getattr(part, "function_call", None) or getattr(
+                part, "functionCall", None
+            )
+            if isinstance(function_call, types.FunctionCall):
+                function_calls.append(function_call)
+    return function_calls
+
+
+def _extract_response_contents(response: object) -> list[types.Content]:
+    contents: list[types.Content] = []
+    for candidate in getattr(response, "candidates", []) or []:
+        content = getattr(candidate, "content", None)
+        if isinstance(content, types.Content):
+            contents.append(content)
+    return contents
+
+
+def _build_model_function_call_content(
+    function_calls: Sequence[types.FunctionCall],
+) -> types.Content:
+    return types.Content(
+        role="model",
+        parts=[
+            types.Part.from_function_call(
+                name=str(call.name or ""), args=call.args or {}
+            )
+            for call in function_calls
+            if call.name
+        ],
+    )
+
+
+def _normalize_tool_response_payload(payload: object) -> dict[str, Any]:
+    if isinstance(payload, BaseModel):
+        return payload.model_dump(mode="json")
+    if isinstance(payload, dict):
+        return payload
+    return {"result": payload}
+
+
+async def _build_tool_response_content(
+    function_calls: Sequence[types.FunctionCall],
+    tool_handlers: dict[str, Callable[..., Awaitable[dict[str, Any]]]],
+) -> types.Content:
+    parts: list[types.Part] = []
+    for function_call in function_calls:
+        tool_name = str(function_call.name or "").strip()
+        if not tool_name or tool_name not in tool_handlers:
+            raise AIServiceError(
+                f"Gemini requested unknown tool: {tool_name or '<missing>'}."
+            )
+
+        args = function_call.args or {}
+        if not isinstance(args, dict):
+            raise AIServiceError(
+                f"Gemini returned invalid arguments for tool {tool_name!r}: {args!r}"
+            )
+
+        try:
+            payload = await tool_handlers[tool_name](**args)
+        except (
+            Exception
+        ) as exc:  # pragma: no cover - tool-specific failures are converted to payloads
+            payload = {"success": False, "error": str(exc)}
+
+        parts.append(
+            types.Part.from_function_response(
+                name=tool_name,
+                response=_normalize_tool_response_payload(payload),
+            )
+        )
+
+    return types.Content(role="tool", parts=parts)
+
+
 async def generate_text(
     messages: Sequence[LLMMessage],
     *,
@@ -271,6 +413,157 @@ async def generate_text(
     except Exception as e:  # pragma: no cover - provider exception types are SDK-owned
         raise AIServiceError(f"Gemini request failed: {e}") from e
     return _extract_text(response)
+
+
+async def generate_text_with_tools(
+    messages: Sequence[LLMMessage],
+    *,
+    function_tools: Sequence[GeminiFunctionTool],
+    temperature: float,
+    max_tool_calls: int,
+    max_output_tokens: int | None = None,
+    model: str | None = None,
+) -> str:
+    if not function_tools:
+        return await generate_text(
+            messages,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            model=model,
+        )
+
+    system_instruction, contents = _build_contents(messages)
+    tools, tool_config = _build_function_tools(function_tools)
+    tool_handlers = {tool.name: tool.handler for tool in function_tools}
+    current_contents: list[types.Content] = list(contents)
+
+    for tool_round in range(max_tool_calls + 1):
+        try:
+            response = await _get_client().aio.models.generate_content(
+                model=model or settings.GEMINI_MODEL,
+                contents=current_contents,
+                config=_build_config(
+                    system_instruction=system_instruction,
+                    temperature=temperature,
+                    max_output_tokens=max_output_tokens,
+                    tools=tools,
+                    tool_config=tool_config,
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                        disable=True
+                    ),
+                ),
+            )
+        except (
+            Exception
+        ) as e:  # pragma: no cover - provider exception types are SDK-owned
+            raise AIServiceError(f"Gemini request failed: {e}") from e
+
+        function_calls = _extract_function_calls(response)
+        if not function_calls:
+            return _extract_text(response)
+
+        if tool_round >= max_tool_calls:
+            raise AIServiceError(
+                f"Gemini exceeded the maximum number of tool calls ({max_tool_calls})."
+            )
+
+        response_contents = _extract_response_contents(response)
+        if response_contents:
+            current_contents.extend(response_contents)
+        else:
+            current_contents.append(_build_model_function_call_content(function_calls))
+
+        current_contents.append(
+            await _build_tool_response_content(function_calls, tool_handlers)
+        )
+
+    raise AIServiceError(
+        f"Gemini exceeded the maximum number of tool calls ({max_tool_calls})."
+    )
+
+
+async def generate_model_with_tools(
+    messages: Sequence[LLMMessage],
+    response_model: type[_ModelT],
+    *,
+    function_tools: Sequence[GeminiFunctionTool],
+    temperature: float,
+    max_tool_calls: int,
+    max_output_tokens: int | None = None,
+    model: str | None = None,
+) -> _ModelT:
+    if not function_tools:
+        return await generate_model(
+            messages,
+            response_model,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            model=model,
+        )
+
+    system_instruction, contents = _build_contents(messages)
+    response_schema = normalize_json_schema(response_model.model_json_schema())
+    tools, tool_config = _build_function_tools(function_tools)
+    tool_handlers = {tool.name: tool.handler for tool in function_tools}
+    current_contents: list[types.Content] = list(contents)
+
+    for tool_round in range(max_tool_calls + 1):
+        try:
+            response = await _get_client().aio.models.generate_content(
+                model=model or settings.GEMINI_MODEL,
+                contents=current_contents,
+                config=_build_config(
+                    system_instruction=system_instruction,
+                    temperature=temperature,
+                    max_output_tokens=max_output_tokens,
+                    response_json_schema=response_schema,
+                    tools=tools,
+                    tool_config=tool_config,
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                        disable=True
+                    ),
+                ),
+            )
+        except (
+            Exception
+        ) as e:  # pragma: no cover - provider exception types are SDK-owned
+            raise AIServiceError(f"Gemini request failed: {e}") from e
+
+        function_calls = _extract_function_calls(response)
+        if not function_calls:
+            try:
+                payload = _load_structured_payload(response)
+                if isinstance(payload, response_model):
+                    return payload
+                return response_model.model_validate(payload)
+            except Exception as e:
+                preview = _response_preview(response)
+                if preview:
+                    raise AIServiceError(
+                        f"Failed to parse Gemini structured response: {e}. Raw response preview: {preview!r}"
+                    ) from e
+                raise AIServiceError(
+                    f"Failed to parse Gemini structured response: {e}"
+                ) from e
+
+        if tool_round >= max_tool_calls:
+            raise AIServiceError(
+                f"Gemini exceeded the maximum number of tool calls ({max_tool_calls})."
+            )
+
+        response_contents = _extract_response_contents(response)
+        if response_contents:
+            current_contents.extend(response_contents)
+        else:
+            current_contents.append(_build_model_function_call_content(function_calls))
+
+        current_contents.append(
+            await _build_tool_response_content(function_calls, tool_handlers)
+        )
+
+    raise AIServiceError(
+        f"Gemini exceeded the maximum number of tool calls ({max_tool_calls})."
+    )
 
 
 async def generate_model(

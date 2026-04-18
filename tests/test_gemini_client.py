@@ -12,12 +12,17 @@ from src.chatbot.schema import SwapItems
 
 
 class _FakeAioModels:
-    def __init__(self, response=None):
+    def __init__(self, response=None, responses=None):
         self.calls = []
-        self.response = response or SimpleNamespace(text='{"ok": true}', parsed={"ok": True})
+        self.response = response or SimpleNamespace(
+            text='{"ok": true}', parsed={"ok": True}
+        )
+        self.responses = list(responses or [])
 
     async def generate_content(self, **kwargs):
         self.calls.append(kwargs)
+        if self.responses:
+            return self.responses.pop(0)
         return self.response
 
 
@@ -36,7 +41,10 @@ def test_generate_model_enforces_json_schema(monkeypatch):
 
     result = asyncio.run(
         gemini_client.generate_model(
-            [{"role": "system", "content": "Return JSON"}, {"role": "user", "content": "hi"}],
+            [
+                {"role": "system", "content": "Return JSON"},
+                {"role": "user", "content": "hi"},
+            ],
             _OkModel,
             temperature=0,
         )
@@ -45,7 +53,9 @@ def test_generate_model_enforces_json_schema(monkeypatch):
     assert result.ok is True
     config = fake_client.aio.models.calls[0]["config"]
     assert config.response_mime_type == "application/json"
-    assert config.response_json_schema == gemini_client.normalize_json_schema(_OkModel.model_json_schema())
+    assert config.response_json_schema == gemini_client.normalize_json_schema(
+        _OkModel.model_json_schema()
+    )
     assert config.max_output_tokens is None
 
 
@@ -56,7 +66,10 @@ def test_generate_text_does_not_request_json(monkeypatch):
 
     response = asyncio.run(
         gemini_client.generate_text(
-            [{"role": "system", "content": "Be brief"}, {"role": "user", "content": "hi"}],
+            [
+                {"role": "system", "content": "Be brief"},
+                {"role": "user", "content": "hi"},
+            ],
             temperature=0.7,
         )
     )
@@ -69,13 +82,18 @@ def test_generate_text_does_not_request_json(monkeypatch):
 
 
 def test_generate_text_raises_on_empty_response(monkeypatch):
-    fake_client = _FakeClient(models=_FakeAioModels(response=SimpleNamespace(text="", parsed=None)))
+    fake_client = _FakeClient(
+        models=_FakeAioModels(response=SimpleNamespace(text="", parsed=None))
+    )
     monkeypatch.setattr(gemini_client, "_client", fake_client)
 
     with pytest.raises(AIServiceError, match="empty text content"):
         asyncio.run(
             gemini_client.generate_text(
-                [{"role": "system", "content": "Be brief"}, {"role": "user", "content": "hi"}],
+                [
+                    {"role": "system", "content": "Be brief"},
+                    {"role": "user", "content": "hi"},
+                ],
                 temperature=0.7,
             )
         )
@@ -88,7 +106,10 @@ def test_generate_text_forwards_explicit_max_output_tokens(monkeypatch):
 
     response = asyncio.run(
         gemini_client.generate_text(
-            [{"role": "system", "content": "Be brief"}, {"role": "user", "content": "hi"}],
+            [
+                {"role": "system", "content": "Be brief"},
+                {"role": "user", "content": "hi"},
+            ],
             temperature=0.7,
             max_output_tokens=42,
         )
@@ -131,22 +152,178 @@ def test_normalize_json_schema_handles_nested_models():
     assert remove_item["type"] == "object"
     assert remove_item["properties"]["modifier"]["type"] == ["string", "null"]
     assert remove_item["properties"]["selected_mods"]["type"] == ["object", "null"]
-    assert remove_item["properties"]["selected_mods"]["additionalProperties"]["type"] == ["string", "array"]
+    assert remove_item["properties"]["selected_mods"]["additionalProperties"][
+        "type"
+    ] == ["string", "array"]
     assert (
-        remove_item["properties"]["selected_mods"]["additionalProperties"]["items"]["type"] == "string"
+        remove_item["properties"]["selected_mods"]["additionalProperties"]["items"][
+            "type"
+        ]
+        == "string"
     )
     assert remove_item["properties"]["resolved_mods"]["type"] == ["array", "null"]
 
 
 def test_generate_model_includes_raw_preview_on_non_json(monkeypatch):
-    fake_client = _FakeClient(models=_FakeAioModels(response=SimpleNamespace(text="menu_question", parsed=None)))
+    fake_client = _FakeClient(
+        models=_FakeAioModels(
+            response=SimpleNamespace(text="menu_question", parsed=None)
+        )
+    )
     monkeypatch.setattr(gemini_client, "_client", fake_client)
 
     with pytest.raises(AIServiceError, match="Raw response preview: 'menu_question'"):
         asyncio.run(
             gemini_client.generate_model(
-                [{"role": "system", "content": "Return JSON"}, {"role": "user", "content": "show me the menu"}],
+                [
+                    {"role": "system", "content": "Return JSON"},
+                    {"role": "user", "content": "show me the menu"},
+                ],
                 _OkModel,
                 temperature=0,
             )
         )
+
+
+def test_generate_text_with_tools_runs_tool_and_returns_final_text(monkeypatch):
+    tool_call_part = gemini_client.types.Part(
+        functionCall=gemini_client.types.FunctionCall(
+            name="findClosestMenuItems",
+            args={"item_name": "burger", "details": "spicy"},
+        )
+    )
+    first_response = SimpleNamespace(
+        text=None,
+        parsed=None,
+        function_calls=None,
+        candidates=[
+            SimpleNamespace(
+                content=gemini_client.types.Content(
+                    role="model",
+                    parts=[tool_call_part],
+                )
+            )
+        ],
+    )
+    second_response = SimpleNamespace(
+        text="final answer",
+        parsed=None,
+        function_calls=None,
+        candidates=[],
+    )
+    models = _FakeAioModels(responses=[first_response, second_response])
+    fake_client = _FakeClient(models=models)
+    monkeypatch.setattr(gemini_client, "_client", fake_client)
+
+    tool_calls: list[dict] = []
+
+    async def _fake_handler(*, item_name: str, details: str | None = None) -> dict:
+        tool_calls.append({"item_name": item_name, "details": details})
+        return {
+            "exact_match": {"id": "item-1"},
+            "candidates": [{"id": "item-1"}],
+            "match_confidence": "exact",
+        }
+
+    result = asyncio.run(
+        gemini_client.generate_text_with_tools(
+            [
+                {"role": "system", "content": "Use tools"},
+                {"role": "user", "content": "hi"},
+            ],
+            function_tools=[
+                gemini_client.GeminiFunctionTool(
+                    name="findClosestMenuItems",
+                    description="Find menu items",
+                    parameters_json_schema={
+                        "type": "object",
+                        "properties": {
+                            "item_name": {"type": "string"},
+                            "details": {"type": ["string", "null"]},
+                        },
+                        "required": ["item_name"],
+                        "additionalProperties": False,
+                    },
+                    handler=_fake_handler,
+                )
+            ],
+            temperature=0,
+            max_tool_calls=2,
+        )
+    )
+
+    assert result == "final answer"
+    assert tool_calls == [{"item_name": "burger", "details": "spicy"}]
+    assert models.calls[0]["config"].tools is not None
+    assert len(models.calls) == 2
+    second_round_contents = models.calls[1]["contents"]
+    assert any(content.role == "tool" for content in second_round_contents)
+
+
+def test_generate_model_with_tools_runs_tool_and_validates_structured_output(
+    monkeypatch,
+):
+    tool_call_part = gemini_client.types.Part(
+        functionCall=gemini_client.types.FunctionCall(
+            name="findClosestMenuItems",
+            args={"item_name": "burger", "details": None},
+        )
+    )
+    first_response = SimpleNamespace(
+        text=None,
+        parsed=None,
+        function_calls=None,
+        candidates=[
+            SimpleNamespace(
+                content=gemini_client.types.Content(
+                    role="model",
+                    parts=[tool_call_part],
+                )
+            )
+        ],
+    )
+    second_response = SimpleNamespace(
+        text='{"ok": true}',
+        parsed={"ok": True},
+        function_calls=None,
+        candidates=[],
+    )
+    models = _FakeAioModels(responses=[first_response, second_response])
+    fake_client = _FakeClient(models=models)
+    monkeypatch.setattr(gemini_client, "_client", fake_client)
+
+    tool_calls: list[dict] = []
+
+    async def _fake_handler(*, item_name: str, details: str | None = None) -> dict:
+        tool_calls.append({"item_name": item_name, "details": details})
+        return {"match_confidence": "exact"}
+
+    result = asyncio.run(
+        gemini_client.generate_model_with_tools(
+            [{"role": "user", "content": "hi"}],
+            _OkModel,
+            function_tools=[
+                gemini_client.GeminiFunctionTool(
+                    name="findClosestMenuItems",
+                    description="Find menu items",
+                    parameters_json_schema={
+                        "type": "object",
+                        "properties": {
+                            "item_name": {"type": "string"},
+                            "details": {"type": ["string", "null"]},
+                        },
+                        "required": ["item_name"],
+                        "additionalProperties": False,
+                    },
+                    handler=_fake_handler,
+                )
+            ],
+            temperature=0,
+            max_tool_calls=2,
+        )
+    )
+
+    assert result.ok is True
+    assert tool_calls == [{"item_name": "burger", "details": None}]
+    assert len(models.calls) == 2
+    assert models.calls[0]["config"].response_mime_type == "application/json"

@@ -71,3 +71,17 @@ These diagnostics are expected and can be ignored:
 # Fast API Architecure Rule
 
 Make sure every function has async await. Never make a function that is not async await
+
+# Agent Tool Functions (`src/chatbot/tools.py`)
+
+Functions in this file are called directly by the AI agent. Follow these rules when adding or editing tools:
+
+- **No Pydantic anywhere in this file.** Do not import or use `BaseModel`, Pydantic validators, TypedDict, or any structured type class for inputs, outputs, or internal data shapes. This applies to all code in the file, not just function signatures.
+- **Plain dicts only.** Return `dict` from all tool functions. Annotate the return type as `dict`. Document the shape of the dict in the function docstring instead.
+- **Spell out every field.** Each `TypedDict` field must have an inline comment explaining what it contains and when it is populated. Do the same for any nested shape that isn't obvious.
+- **Write a full docstring.** Every tool function must have a docstring that covers:
+  - What the tool does and when to call it
+  - Each parameter: what it is, how to pass it, what NOT to do (e.g. "do not normalise spelling")
+  - Each return field: type, meaning, and when it is/isn't populated
+  - A short "decision guide" showing the agent exactly what action to take for each possible output value
+- **Use `print` for debug output** (not `logging`) so output is visible during development.

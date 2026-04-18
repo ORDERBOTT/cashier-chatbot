@@ -1,37 +1,247 @@
 import json
+import os
 from pathlib import Path
 
 from rapidfuzz import fuzz, process, utils
 
-INVENTORY_PATH = Path(__file__).parent.parent.parent / "data" / "inventory.json"
+from src import firebase as _firebase
+from src.cache import cache_set
+from src.config import settings
+from src.menu.clover_client import ensure_fresh_clover_access_token, fetch_clover_menu, fetch_clover_modifiers
 _VARIABLE_PRICE_GROUP_NAMES = {"patties", "quantity"}
 _QUANTITY_AS_SELECTION_GROUP_NAMES = {"quantity"}
 
 _items_by_name: dict[str, dict] = {}
 _items_by_id: dict[str, dict] = {}
 _combos: list[dict] = []
+_items_name_set: set[str] = set()
 
 
-async def init_menu() -> None:
-    global _items_by_name, _items_by_id, _combos
-    raw = json.loads(INVENTORY_PATH.read_text())
-    by_name: dict[str, dict] = {}
-    by_id: dict[str, dict] = {}
-    for item_data in raw.values():
-        cats = item_data.get("categories", [])
-        modifier_groups = [
-            {
-                "id": g.get("id", ""),
+def _top_level_modifier_group_elements(raw: dict) -> list[dict]:
+    groups = raw.get("modifierGroups")
+    if isinstance(groups, dict):
+        elems = groups.get("elements")
+        if isinstance(elems, list):
+            return elems
+    return []
+
+
+def _top_level_modifier_elements(raw: dict) -> list[dict]:
+    modifiers = raw.get("modifiers")
+    if isinstance(modifiers, dict):
+        elems = modifiers.get("elements")
+        if isinstance(elems, list):
+            return elems
+    root = raw.get("modifierElements")
+    if isinstance(root, list):
+        return root
+    return []
+
+
+def _clover_item_elements(raw: dict) -> list[dict]:
+    """Clover v3 inventory may return ``items.elements`` (legacy) or a top-level ``elements`` list."""
+    items = raw.get("items")
+    if isinstance(items, dict):
+        el = items.get("elements")
+        if isinstance(el, list):
+            return el
+    root = raw.get("elements")
+    if isinstance(root, list):
+        return root
+    return []
+
+
+def _normalized_modifier_row(modifier: dict) -> dict | None:
+    modifier_id = str(modifier.get("id", "")).strip()
+    if not modifier_id:
+        return None
+    return {
+        "id": modifier_id,
+        "name": str(modifier.get("name", "")).strip(),
+        "price": modifier.get("price", 0) or 0,
+    }
+
+
+def _merge_modifier_registry_from_rows(modifiers: list[dict], registry: dict[str, dict]) -> None:
+    for modifier in modifiers:
+        if not isinstance(modifier, dict):
+            continue
+        normalized = _normalized_modifier_row(modifier)
+        if normalized is None:
+            continue
+        current = registry.get(normalized["id"])
+        if current is None or _modifier_detail_score(normalized) > _modifier_detail_score(current):
+            registry[normalized["id"]] = normalized
+
+
+def _hydrate_modifier_rows_with_registry(rows: list[dict], modifier_registry: dict[str, dict]) -> list[dict]:
+    hydrated: list[dict] = []
+    for row in rows:
+        modifier_id = str(row.get("id", "")).strip()
+        if not modifier_id:
+            continue
+        best = dict(row)
+        known = modifier_registry.get(modifier_id)
+        if known is not None and _modifier_detail_score(known) > _modifier_detail_score(best):
+            best = dict(known)
+        hydrated.append(best)
+    return hydrated
+
+
+def _expanded_modifier_elements_from_clover_group(group: dict) -> list[dict]:
+    inner = group.get("modifiers")
+    if isinstance(inner, dict):
+        elems = inner.get("elements")
+        if isinstance(elems, list) and elems:
+            return [
+                row
+                for modifier in elems
+                if isinstance(modifier, dict)
+                and (row := _normalized_modifier_row(modifier)) is not None
+            ]
+    return []
+
+
+def _modifier_detail_score(modifier: dict) -> tuple[int, int]:
+    name = str(modifier.get("name", "")).strip()
+    modifier_id = str(modifier.get("id", "")).strip()
+    return (
+        int(bool(name and name != modifier_id)),
+        int((modifier.get("price", 0) or 0) != 0),
+    )
+
+
+def _merge_modifier_registry_from_group(group: dict, registry: dict[str, dict]) -> None:
+    for modifier in _expanded_modifier_elements_from_clover_group(group):
+        current = registry.get(modifier["id"])
+        if current is None or _modifier_detail_score(modifier) > _modifier_detail_score(current):
+            registry[modifier["id"]] = modifier
+
+
+def _build_modifier_registry(
+    item_rows: list[dict],
+    top_level_groups: list[dict],
+    top_level_modifiers: list[dict],
+) -> dict[str, dict]:
+    registry: dict[str, dict] = {}
+    _merge_modifier_registry_from_rows(top_level_modifiers, registry)
+    for group in top_level_groups:
+        if isinstance(group, dict):
+            _merge_modifier_registry_from_group(group, registry)
+    for item in item_rows:
+        for group in item.get("modifierGroups", {}).get("elements", []):
+            if isinstance(group, dict):
+                _merge_modifier_registry_from_group(group, registry)
+    return registry
+
+
+def _modifier_elements_from_clover_group(group: dict, modifier_registry: dict[str, dict]) -> list[dict]:
+    """Normalise modifiers from expanded ``modifiers.elements`` or ``modifierIds`` CSV."""
+    elems = _hydrate_modifier_rows_with_registry(
+        _expanded_modifier_elements_from_clover_group(group),
+        modifier_registry,
+    )
+    if elems:
+        return elems
+
+    mids = group.get("modifierIds")
+    if isinstance(mids, str) and mids.strip():
+        resolved: list[dict] = []
+        for part in mids.split(","):
+            modifier_id = part.strip()
+            if not modifier_id:
+                continue
+            known = modifier_registry.get(modifier_id)
+            if known is not None:
+                resolved.append(dict(known))
+            else:
+                resolved.append({"id": modifier_id, "name": modifier_id, "price": 0})
+        return resolved
+    return []
+
+
+def _modifier_group_detail_score(group: dict, modifier_registry: dict[str, dict]) -> tuple[int, int, int]:
+    modifiers = _modifier_elements_from_clover_group(group, modifier_registry)
+    named_modifiers = sum(1 for modifier in modifiers if modifier.get("name") and modifier["name"] != modifier["id"])
+    return (named_modifiers, len(modifiers), int(bool(group.get("name"))))
+
+
+def _merge_embedded_modifier_groups(
+    items: list[dict],
+    registry: dict[str, dict],
+    modifier_registry: dict[str, dict],
+) -> None:
+    """Fill registry from per-item modifierGroups (Clover paginated items API shape)."""
+    for item in items:
+        for g in item.get("modifierGroups", {}).get("elements", []):
+            gid = g.get("id")
+            if not gid:
+                continue
+            elems = _modifier_elements_from_clover_group(g, modifier_registry)
+            merged = {
+                "id": gid,
                 "name": g.get("name", ""),
-                "min_required": 0,
-                "max_allowed": 0,
-                "modifiers": [
-                    {"id": m.get("id", ""), "name": m.get("name", ""), "price": m.get("price", 0)}
-                    for m in g.get("modifiers", [])
-                ],
+                "minRequired": g.get("minRequired", 0),
+                "maxAllowed": g.get("maxAllowed", 0),
+                "modifiers": {"elements": elems},
             }
-            for g in item_data.get("modifierGroups", [])
-        ]
+            prev = registry.get(gid)
+            if prev is None:
+                registry[gid] = merged
+                continue
+            if _modifier_group_detail_score(merged, modifier_registry) > _modifier_group_detail_score(prev, modifier_registry):
+                registry[gid] = merged
+
+
+def _group_row_for_item(group_def: dict, ref: dict, modifier_registry: dict[str, dict]) -> dict:
+    elems = _modifier_elements_from_clover_group(group_def, modifier_registry)
+    if not elems:
+        elems = _modifier_elements_from_clover_group(ref, modifier_registry)
+    return {
+        "id": group_def.get("id", "") or ref.get("id", ""),
+        "name": group_def.get("name", "") or ref.get("name", ""),
+        "min_required": group_def.get("minRequired", ref.get("minRequired", 0)),
+        "max_allowed": group_def.get("maxAllowed", ref.get("maxAllowed", 0)),
+        "modifiers": [
+            {"id": m.get("id", ""), "name": m.get("name", ""), "price": m.get("price", 0)}
+            for m in elems
+        ],
+    }
+
+
+def build_normalized_items(raw: dict) -> list[dict]:
+    """Parse raw Clover menu JSON into normalized item rows."""
+    item_rows = _clover_item_elements(raw)
+    top_level_groups = _top_level_modifier_group_elements(raw)
+    top_level_modifiers = _top_level_modifier_elements(raw)
+    modifier_registry = _build_modifier_registry(item_rows, top_level_groups, top_level_modifiers)
+    mod_groups_by_id: dict[str, dict] = {
+        g["id"]: g
+        for g in top_level_groups
+        if isinstance(g, dict) and g.get("id")
+    }
+    _merge_embedded_modifier_groups(item_rows, mod_groups_by_id, modifier_registry)
+
+    items: list[dict] = []
+    for item_data in item_rows:
+        cats = item_data.get("categories", {}).get("elements", [])
+
+        modifier_groups: list[dict] = []
+        for ref in item_data.get("modifierGroups", {}).get("elements", []):
+            gid = ref.get("id", "")
+            group_def = mod_groups_by_id.get(gid) if gid else None
+            if group_def is None and gid:
+                group_def = {
+                    "id": gid,
+                    "name": ref.get("name", ""),
+                    "minRequired": ref.get("minRequired", 0),
+                    "maxAllowed": ref.get("maxAllowed", 0),
+                    "modifiers": {"elements": _modifier_elements_from_clover_group(ref, modifier_registry)},
+                }
+            if group_def is None:
+                continue
+            modifier_groups.append(_group_row_for_item(group_def, ref, modifier_registry))
+
         item = {
             "id": item_data["id"],
             "name": item_data["name"],
@@ -40,17 +250,120 @@ async def init_menu() -> None:
             "price": item_data.get("price", 0),
             "description": item_data.get("alternateName"),
             "modifier_groups": modifier_groups,
+            "available": item_data.get("available", True),
+            "hidden": bool(item_data.get("hidden", False)),
+            "deleted": bool(item_data.get("deleted", False)),
         }
+        items.append(item)
+
+    return items
+
+
+def build_items_by_name(raw: dict) -> dict:
+    """Parse raw Clover menu JSON and return an items_by_name dict.
+
+    Keys are lowercase item names; values are item dicts with fields:
+    id, name, category_id, category_name, price, description, modifier_groups.
+
+    Accepts legacy shape (``items`` + top-level ``modifierGroups``) and v3 paginated
+    inventory shape (top-level ``elements`` only, modifier metadata on each item).
+
+    This is a pure function with no side effects on module globals.
+    """
+    by_name: dict[str, dict] = {}
+    for item in build_normalized_items(raw):
         by_name[item["name"].lower()] = item
+
+    return by_name
+
+
+def _hydrate_menu_from_raw(raw: dict) -> None:
+    """Populate module globals from raw Clover menu JSON (see build_items_by_name)."""
+    global _items_by_name, _items_by_id, _combos, _items_name_set
+    by_name = build_items_by_name(raw)
+    by_id: dict[str, dict] = {}
+    for item in by_name.values():
         by_id[item["id"]] = item
     _items_by_name = by_name
     _items_by_id = by_id
     _combos = []
-    print(f"Menu loaded from inventory.json: {len(_items_by_name)} items")
+    _items_name_set = {item["name"] for item in _items_by_name.values()}
+
+
+async def init_menu() -> None:
+    """Load the in-memory menu used by cart, pricing, and prompts.
+
+    Order: optional ``CLOVER_MENU_JSON_PATH`` file (local/tests), else Clover API
+    using ``Users/{USER_ID}/Integrations/Clover`` in Firestore. On missing
+    credentials or errors, the menu starts empty and the app still boots.
+    """
+    bootstrap = os.environ.get("CLOVER_MENU_JSON_PATH")
+    if bootstrap and Path(bootstrap).is_file():
+        raw = json.loads(Path(bootstrap).read_text())
+        _hydrate_menu_from_raw(raw)
+        print(f"Menu loaded from CLOVER_MENU_JSON_PATH ({bootstrap}): {len(_items_by_name)} items")
+        return
+
+    db = _firebase.firebaseDatabase
+    if db is None:
+        print("init_menu: Firebase client not ready; menu empty")
+        _hydrate_menu_from_raw({"items": {"elements": []}, "modifierGroups": {"elements": []}})
+        return
+
+    if not settings.USER_ID:
+        print(
+            "init_menu: USER_ID unset; menu empty "
+            "(configure Firestore Clover integration or set CLOVER_MENU_JSON_PATH)"
+        )
+        _hydrate_menu_from_raw({"items": {"elements": []}, "modifierGroups": {"elements": []}})
+        return
+
+    try:
+        doc = await (
+            db.collection("Users")
+            .document(settings.USER_ID)
+            .collection("Integrations")
+            .document("Clover")
+            .get()
+        )
+        creds = doc.to_dict() or {}
+        if not creds.get("access_token") or not creds.get("merchant_id"):
+            print(
+                "init_menu: no Clover access_token / merchant_id in Firestore; menu empty"
+            )
+            _hydrate_menu_from_raw({"items": {"elements": []}, "modifierGroups": {"elements": []}})
+            return
+
+        merchant_id = creds["merchant_id"]
+        base_url = str(creds.get("api_base_url") or settings.CLOVER_API_BASE_URL).rstrip("/")
+        access_token = await ensure_fresh_clover_access_token(
+            creds,
+            base_url,
+            doc.reference,
+            app_client_id=settings.CLOVER_APP_ID,
+        )
+        raw = await fetch_clover_menu(access_token, merchant_id, base_url)
+        raw["modifiers"] = await fetch_clover_modifiers(access_token, merchant_id, base_url)
+        _hydrate_menu_from_raw(raw)
+        await cache_set(f"menu:{merchant_id}", json.dumps(_items_by_name), ttl=300)
+        print(f"Menu loaded from Clover API: {len(_items_by_name)} items (merchant {merchant_id})")
+    except Exception as exc:
+        print(f"init_menu: Clover load failed ({exc!r}); menu empty")
+        _hydrate_menu_from_raw({"items": {"elements": []}, "modifierGroups": {"elements": []}})
 
 
 async def get_menu_item_names() -> list[str]:
     return [item["name"] for item in _items_by_name.values()]
+
+
+async def get_menu_item_names_set() -> set[str]:
+    """Return the set of all menu item display names for O(1) membership tests.
+
+    Prefer this over get_menu_item_names() when you only need to check whether
+    a name exists on the menu (e.g. exact-match checks). Use get_menu_item_names()
+    when you need an ordered list for fuzzy matching.
+    """
+    return _items_name_set
 
 
 async def get_menu_item_modifiers_and_add_ons(name: str) -> tuple[list[str], list[str]]:

@@ -32,3 +32,11 @@ async def cache_delete(key: str) -> None:
 
 async def cache_flush_all() -> None:
     await redis.flushall()
+
+
+async def cache_list_length(key: str) -> int:
+    return await redis.llen(key)
+
+
+async def cache_list_range(key: str, start: int, end: int) -> list[str]:
+    return await redis.lrange(key, start, end)
