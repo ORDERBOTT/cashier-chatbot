@@ -513,7 +513,15 @@
 <script>
   const USER_ID = "1";
   const SESSION_ID = "1";
-  const MERCHANT_ID = "1";
+
+  /** v2 API: send only the latest user turn; history lives server-side (Redis). */
+  function buildChatbotV2MessageBody(latestUserMessage) {
+    return {
+      user_message: latestUserMessage,
+      session_id: SESSION_ID,
+      merchant_id: "d60a9acd-53e8-4f6e-87f9-8651e2c29efe",
+    };
+  }
 
   const messagesEl        = document.getElementById("messages");
   const inputEl           = document.getElementById("user-input");
@@ -687,19 +695,13 @@
 
     appendMessage("user", text);
 
-    const body = {
-      user_message: text,
-      session_id: SESSION_ID,
-      merchant_id: MERCHANT_ID,
-    };
-
     showTyping();
 
     try {
       const res = await fetch("/chatbot/v2/message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(buildChatbotV2MessageBody(text)),
       });
 
       hideTyping();
@@ -765,19 +767,13 @@
 
     appendMessage("user", text);
 
-    const body = {
-      user_message: text,
-      session_id: SESSION_ID,
-      merchant_id: MERCHANT_ID,
-    };
-
     showTyping();
 
     try {
       const res = await fetch("/chatbot/v2/message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(buildChatbotV2MessageBody(text)),
       });
 
       hideTyping();
