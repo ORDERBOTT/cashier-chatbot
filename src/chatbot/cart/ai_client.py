@@ -4,10 +4,12 @@ from src.chatbot.cart.utils import format_money_context_for_prompt
 from src.chatbot.gemini_client import generate_model, generate_text
 from src.chatbot.internal_schemas import (
     ClosestModifierResolution,
+    ModifierAddonCheckResult,
     OrderFinalizationIntent,
     OrderSupervisionResult,
 )
 from src.chatbot.prompts import (
+    CHECK_IF_MODIFIER_OR_ADDON_SYSTEM_PROMPT,
     POLISH_FOOD_ORDER_REPLY_SYSTEM_PROMPT,
     RESOLVE_CLOSEST_MODIFIER_SYSTEM_PROMPT,
     RESOLVE_ORDER_FINALIZATION_SYSTEM_PROMPT,
@@ -61,6 +63,30 @@ async def resolve_closest_modifier_match(
     return await generate_model(
         messages,
         ClosestModifierResolution,
+        temperature=0,
+    )
+
+
+async def classify_modifier_or_addon_request(
+    *,
+    item_name: str,
+    requested_modification: str,
+    candidate_modifiers: list[dict],
+    modifier_groups: list[dict],
+) -> ModifierAddonCheckResult:
+    system = CHECK_IF_MODIFIER_OR_ADDON_SYSTEM_PROMPT.format(
+        item_name=item_name,
+        requested_modification=requested_modification,
+        candidate_modifiers=json.dumps(candidate_modifiers, ensure_ascii=False),
+        modifier_groups=json.dumps(modifier_groups, ensure_ascii=False),
+    )
+    messages: list[dict] = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": requested_modification},
+    ]
+    return await generate_model(
+        messages,
+        ModifierAddonCheckResult,
         temperature=0,
     )
 

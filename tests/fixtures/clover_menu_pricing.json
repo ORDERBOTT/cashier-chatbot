@@ -1,0 +1,168 @@
+{
+  "modifierGroups": {
+    "elements": [
+      {
+        "id": "5D40H2RY6M9NR",
+        "name": "Chicken Sando Seasoning",
+        "minRequired": 0,
+        "maxAllowed": 1,
+        "modifiers": {
+          "elements": [
+            {"id": "9YJW5D7V07QPC", "name": "Naked", "price": 0},
+            {"id": "BW3A5ARZGTHZ8", "name": "Mild", "price": 0},
+            {"id": "4XCRSWBJK0C5Y", "name": "Spicy", "price": 0},
+            {"id": "43X18SGQV39QE", "name": "Extra Spicy", "price": 0}
+          ]
+        }
+      },
+      {
+        "id": "1VX2C2BPW7W14",
+        "name": "Make It a Combo With Fries",
+        "minRequired": 0,
+        "maxAllowed": 1,
+        "modifiers": {
+          "elements": [
+            {"id": "3MWZTR3VCY4X2", "name": "Plain Fries", "price": 350},
+            {"id": "39QG6VKJXD0WG", "name": "Lemon Pepper Fries", "price": 350},
+            {"id": "Z5D211K707CFJ", "name": "Cajun Fries", "price": 350},
+            {"id": "SGSFVN0DM1DZ4", "name": "Nashville Seasoning Fries", "price": 350},
+            {"id": "6YKV008R95M5J", "name": "No Mods", "price": 0}
+          ]
+        }
+      },
+      {
+        "id": "MDZ9DNF7T63ZG",
+        "name": "Add Ons",
+        "minRequired": 0,
+        "maxAllowed": 10,
+        "modifiers": {
+          "elements": [
+            {"id": "R9NZMW5RYFKTJ", "name": "Raw Diced Onion", "price": 75},
+            {"id": "THRQQM9TRSEZY", "name": "Grilled Shaved Onion", "price": 75},
+            {"id": "ER1Y0Y3M4ZSEE", "name": "Jalepeno", "price": 75},
+            {"id": "G6XS8CGMNAM3P", "name": "Onion Ring", "price": 100},
+            {"id": "AYEZR1VAF8CVE", "name": "Beef Bacon", "price": 300}
+          ]
+        }
+      },
+      {
+        "id": "YTV0VT6PNMDSY",
+        "name": "Hold Hot Honey",
+        "minRequired": 0,
+        "maxAllowed": 10,
+        "modifiers": {
+          "elements": [
+            {"id": "P4ZCW29FCFJTT", "name": "No Smash Sauce", "price": 0},
+            {"id": "P3943NC2R7QHJ", "name": "No Hot Honey", "price": 0}
+          ]
+        }
+      },
+      {
+        "id": "RH43QFFF99GH0",
+        "name": "Lettuce Bun",
+        "minRequired": 0,
+        "maxAllowed": 1,
+        "modifiers": {
+          "elements": [
+            {"id": "VAHJT28NE9ZXM", "name": "Lettuce Bun", "price": 150},
+            {"id": "0QAXCJFMZKKN0", "name": "No Mods", "price": 0}
+          ]
+        }
+      },
+      {
+        "id": "QKV44MYTDKCF6",
+        "name": "Patties",
+        "minRequired": 0,
+        "maxAllowed": 1,
+        "modifiers": {
+          "elements": [
+            {"id": "9W84PFTR54Z20", "name": "Single", "price": 899},
+            {"id": "83H5WQY3RD3MT", "name": "Double", "price": 1199},
+            {"id": "92GR5XDJJMF2A", "name": "Triple", "price": 1499},
+            {"id": "XD0KDR95AVW1M", "name": "Quadruple", "price": 1699}
+          ]
+        }
+      },
+      {
+        "id": "1MK5YN9Z9XT7Y",
+        "name": "Flavor",
+        "minRequired": 0,
+        "maxAllowed": 1,
+        "modifiers": {
+          "elements": [
+            {"id": "6JCKSR3S61APE", "name": "Naked", "price": 0},
+            {"id": "JTCXPJ7MXK6W0", "name": "Hot Honey", "price": 0},
+            {"id": "921FERPQ4VKSY", "name": "Sweet n Spicy", "price": 0}
+          ]
+        }
+      },
+      {
+        "id": "SYBCNREXS13E8",
+        "name": "Quantity",
+        "minRequired": 0,
+        "maxAllowed": 1,
+        "modifiers": {
+          "elements": [
+            {"id": "GYW5GPXCHK36J", "name": "6", "price": 799},
+            {"id": "JYEPE83VH3JJA", "name": "12", "price": 1598},
+            {"id": "45WZYAVKSS1EG", "name": "18", "price": 2397}
+          ]
+        }
+      }
+    ]
+  },
+  "items": {
+    "elements": [
+      {
+        "id": "6STZFD12K1VBC",
+        "name": "Chicken Sando",
+        "price": 899,
+        "alternateName": "Potato Roll, Crispy Hand Battered Chicken, Kaleslaw, Crinkle Cut pickles, Sweet Chili Aioli",
+        "categories": {
+          "elements": [
+            {"id": "QXZW91N9KD516", "name": "Lets Smash (Crispy Chicken Menu)"}
+          ]
+        },
+        "modifierGroups": {
+          "elements": [
+            {"id": "5D40H2RY6M9NR"},
+            {"id": "1VX2C2BPW7W14"}
+          ]
+        }
+      },
+      {
+        "id": "QVEYZCZF2YVTJ",
+        "name": "Hot Honey Burger",
+        "price": 0,
+        "alternateName": "Smash sauce, diced Spanish onion, American cheese, fresh shaved jalapeños, hot honey.",
+        "categories": {
+          "elements": [{"id": "DK7G1ZNBZSM7R", "name": "Smash Burgers"}]
+        },
+        "modifierGroups": {
+          "elements": [
+            {"id": "MDZ9DNF7T63ZG"},
+            {"id": "YTV0VT6PNMDSY"},
+            {"id": "RH43QFFF99GH0"},
+            {"id": "1VX2C2BPW7W14"},
+            {"id": "QKV44MYTDKCF6"}
+          ]
+        }
+      },
+      {
+        "id": "H8B4WCQ6JT2EP",
+        "name": "Boneless Wings",
+        "price": 0,
+        "categories": {
+          "elements": [{"id": "ZSGYDZKFC79X6", "name": "Boneless Wings"}]
+        },
+        "modifierGroups": {
+          "elements": [
+            {"id": "1MK5YN9Z9XT7Y"},
+            {"id": "1VX2C2BPW7W14"},
+            {"id": "SYBCNREXS13E8"}
+          ]
+        }
+      }
+    ]
+  }
+}

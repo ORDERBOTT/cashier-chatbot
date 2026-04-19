@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, field_validator
 from src.chatbot.constants import ConversationState
 from src.chatbot.utils import _parse_conversation_state
 
+
 class IntentAnalysis(BaseModel):
     state: ConversationState
     confidence: Literal["high", "medium", "low"]
@@ -85,8 +86,30 @@ class ClosestModifierResolution(BaseModel):
     reasoning: str | None = None
 
 
+ModifierAddonKind = Literal[
+    "quantity_variation",
+    "cooking_preference",
+    "ingredient_variation",
+    "not_addon",
+]
+
+
+class ClosestModifierReference(BaseModel):
+    modifierId: str
+    name: str
+
+
+class ModifierAddonCheckResult(BaseModel):
+    isModifierOrAddon: bool
+    classification: ModifierAddonKind | None = None
+    closestModifier: ClosestModifierReference | None = None
+    suggestedNote: str | None = None
+
+
 class OrderFollowUpRequirement(BaseModel):
-    kind: Literal["burger_patties", "wings_quantity", "wings_flavor", "wings_flavor_limit"]
+    kind: Literal[
+        "burger_patties", "wings_quantity", "wings_flavor", "wings_flavor_limit"
+    ]
     item_name: str
     details: dict[str, Any] = Field(default_factory=dict)
 

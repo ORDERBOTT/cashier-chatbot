@@ -185,13 +185,13 @@ def _build_asyncmodel(class_name: str, base: str, docs: list[dict], nested_model
 # ---------------------------------------------------------------------------
 
 async def main() -> None:
-    if not settings.USER_ID:
-        print("ERROR: USER_ID not set")
+    if not str(settings.RESTAURANT_ID).strip():
+        print("ERROR: RESTAURANT_ID not set")
         sys.exit(1)
 
     await init_firebase()
     db = firebase_module.firebaseDatabase
-    user_id = settings.USER_ID
+    user_id = settings.RESTAURANT_ID
 
     # Users root doc
     user_snap = await db.collection("Users").document(user_id).get()
