@@ -32,6 +32,10 @@ def _menu_fetched_at_key(merchant_id: str) -> str:
     return f"menu:v{_MENU_CACHE_VERSION}:fetched_at:{merchant_id}"
 
 
+def _session_clarification_and_intent_redis_key(session_id: str) -> str:
+    return f"clarification_and_intent:{session_id}"
+
+
 def _session_clover_order_redis_key(session_id: str) -> str:
     """Build the Redis key used to store the Clover order id for a chat session.
 
@@ -366,6 +370,100 @@ def _priced_line_item(line_item: dict) -> dict:
         "modifierPrices": modifier_prices,
         "lineTotal": line_total,
     }
+
+
+async def saveClarificationAndIntent(
+    session_id: str,
+    clarification_questions: list[str] | str,
+    parsed_intents: list[dict],
+) -> None:
+    """
+    Persist the Execution Agent's clarification questions and the Parsing Agent's
+    parsed intents to Redis under the given session_id.
+
+    - session_id: the chat session identifier
+    - clarification_questions: list of free-text questions from pending_clarifications
+    - parsed_intents: list of dicts serialized from ParsedRequestsPayload.data
+      (each has keys: intent, confidence_level, request_items, request_details)
+
+    TTL: 3 hours (_SESSION_CLARIFICATION_AND_INTENT_TTL_SECONDS)
+    Overwrites any previously saved value for the session.
+    """
+    import datetime
+    from src.chatbot.constants import _SESSION_CLARIFICATION_AND_INTENT_TTL_SECONDS
+
+    payload = {
+        "clarification_questions": clarification_questions,
+        "parsed_intents": parsed_intents,
+        "saved_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    key = _session_clarification_and_intent_redis_key(session_id)
+    await cache_set(key, json.dumps(payload), ttl=_SESSION_CLARIFICATION_AND_INTENT_TTL_SECONDS)
+    print(
+        "[saveClarificationAndIntent]",
+        f"session_id={session_id!r}",
+        f"clarification_count={len(clarification_questions)}",
+        f"intent_count={len(parsed_intents)}",
+    )
+
+
+async def getClarificationAndIntent(session_id: str) -> dict:
+    """
+    Retrieve the most recently saved clarification questions and parsed intents
+    for a session from Redis.
+
+    Call this to read back what saveClarificationAndIntent last persisted.
+    Returns None-equivalent data (empty lists) when nothing has been saved yet
+    or the key has expired.
+
+    Parameters:
+    - session_id: the chat session identifier — same value passed to
+      saveClarificationAndIntent when the data was written.
+
+    Returns a dict with the following fields:
+    - success (bool): True if data was found and parsed; False on missing key or error.
+    - clarification_questions (list[str]): questions the agent needed answered.
+      Empty list when success is False or no questions were pending.
+    - parsed_intents (list[dict]): parsed intent items from the Parsing Agent.
+      Each dict has keys: Intent, Confidence_level, Request_items, Request_details.
+      Empty list when success is False or no intents were saved.
+    - saved_at (str | None): ISO timestamp of when the data was written.
+      None when success is False.
+    - error (str | None): human-readable error message; None when success is True.
+
+    Decision guide:
+    - success True, clarification_questions non-empty → pending clarifications exist
+    - success True, clarification_questions empty → no clarifications needed last turn
+    - success False, error contains "not found" → key expired or never written
+    - success False, other error → Redis or JSON parse failure
+    """
+    key = _session_clarification_and_intent_redis_key(session_id)
+    try:
+        raw = await cache_get(key)
+        if raw is None:
+            return {
+                "success": False,
+                "clarification_questions": [],
+                "parsed_intents": [],
+                "saved_at": None,
+                "error": "clarification and intent not found for session",
+            }
+        payload = json.loads(raw)
+        return {
+            "success": True,
+            "clarification_questions": payload.get("clarification_questions", []),
+            "parsed_intents": payload.get("parsed_intents", []),
+            "saved_at": payload.get("saved_at"),
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "clarification_questions": [],
+            "parsed_intents": [],
+            "saved_at": None,
+            "error": str(exc),
+        }
 
 
 def _sum_line_item_totals(line_items: list[dict]) -> int:

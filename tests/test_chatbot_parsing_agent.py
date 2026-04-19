@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.chatbot import gemini_client
+from src.chatbot import orchestrator as orchestrator_mod
 from src.chatbot.exceptions import AIServiceError
 from src.chatbot.orchestrator import ParsingAgent
 from src.chatbot.schema import (
@@ -26,7 +27,6 @@ def _context() -> ParsingAgentContext:
         ),
         most_recent_message="add a burger and remove fries",
         latest_k_messages_by_customer=["hi", "one fries"],
-        summary_of_messages_before_k_by_customer="Earlier customer summary",
     )
 
 
@@ -53,10 +53,6 @@ def test_parsing_agent_builds_prompt_with_production_sections_and_context():
         in messages[1]["content"]
     )
     assert '"latest_k_messages_by_customer"' in messages[1]["content"]
-    assert (
-        '"summary_of_messages_before_k_by_customer": "Earlier customer summary"'
-        in messages[1]["content"]
-    )
     assert '"current_order_details"' in messages[1]["content"]
 
 
@@ -176,3 +172,85 @@ def test_parsing_agent_raises_after_retry_failure(monkeypatch):
 
     with pytest.raises(AIServiceError, match="Parsing agent failed after retry"):
         asyncio.run(ParsingAgent().run(context=_context()))
+
+
+class _FakeGemini503(Exception):
+    """Mimics ``google.genai.errors.ServerError`` exposing HTTP status as ``code``."""
+
+    code = 503
+
+
+def test_parsing_agent_retries_gemini_503_then_succeeds(monkeypatch):
+    monkeypatch.setattr(orchestrator_mod, "_GEMINI_503_BACKOFF_SEC", 0.0)
+    calls = 0
+
+    async def _fake_generate_model(messages, response_model, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise AIServiceError(
+                "Gemini request failed: overloaded"
+            ) from _FakeGemini503()
+        return response_model.model_validate(
+            {
+                "Data": [
+                    {
+                        "Intent": "add_item",
+                        "Confidence_level": "high",
+                        "Request_items": {
+                            "name": "burger",
+                            "quantity": 1,
+                            "details": "",
+                        },
+                        "Request_details": "ok",
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(gemini_client, "generate_model", _fake_generate_model)
+
+    result = asyncio.run(ParsingAgent().run(context=_context()))
+
+    assert calls == 3
+    assert result.parsed_requests.data[0].intent == "add_item"
+
+
+def test_parsing_agent_stops_after_ten_gemini_503_attempts(monkeypatch):
+    monkeypatch.setattr(orchestrator_mod, "_GEMINI_503_BACKOFF_SEC", 0.0)
+    calls = 0
+
+    async def _fake_generate_model(messages, response_model, **kwargs):
+        nonlocal calls
+        del messages
+        del response_model
+        del kwargs
+        calls += 1
+        raise AIServiceError("Gemini request failed: unavailable") from _FakeGemini503()
+
+    monkeypatch.setattr(gemini_client, "generate_model", _fake_generate_model)
+
+    with pytest.raises(AIServiceError, match="Gemini request failed"):
+        asyncio.run(ParsingAgent().run(context=_context()))
+
+    assert calls == 10
+
+
+def test_parsing_agent_does_not_retry_non_503_gemini_errors(monkeypatch):
+    monkeypatch.setattr(orchestrator_mod, "_GEMINI_503_BACKOFF_SEC", 0.0)
+    calls = 0
+
+    async def _fake_generate_model(messages, response_model, **kwargs):
+        nonlocal calls
+        del messages
+        del response_model
+        del kwargs
+        calls += 1
+        raise AIServiceError("Gemini request failed: rate limited") from RuntimeError()
+
+    monkeypatch.setattr(gemini_client, "generate_model", _fake_generate_model)
+
+    with pytest.raises(AIServiceError, match="Gemini request failed"):
+        asyncio.run(ParsingAgent().run(context=_context()))
+
+    assert calls == 1

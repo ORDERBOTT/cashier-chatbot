@@ -5,9 +5,6 @@ from pathlib import Path
 from rapidfuzz import fuzz, process, utils
 
 from src import firebase as _firebase
-from src.cache import cache_set
-from src.config import settings
-from src.menu.clover_client import ensure_fresh_clover_access_token, fetch_clover_menu, fetch_clover_modifiers
 _VARIABLE_PRICE_GROUP_NAMES = {"patties", "quantity"}
 _QUANTITY_AS_SELECTION_GROUP_NAMES = {"quantity"}
 
@@ -310,46 +307,8 @@ async def init_menu() -> None:
         _hydrate_menu_from_raw({"items": {"elements": []}, "modifierGroups": {"elements": []}})
         return
 
-    if not str(settings.RESTAURANT_ID).strip():
-        print(
-            "init_menu: RESTAURANT_ID unset; menu empty "
-            "(configure Firestore Clover integration or set CLOVER_MENU_JSON_PATH)"
-        )
-        _hydrate_menu_from_raw({"items": {"elements": []}, "modifierGroups": {"elements": []}})
-        return
-
-    try:
-        doc = await (
-            db.collection("Users")
-            .document(settings.RESTAURANT_ID)
-            .collection("Integrations")
-            .document("Clover")
-            .get()
-        )
-        creds = doc.to_dict() or {}
-        if not creds.get("access_token") or not creds.get("merchant_id"):
-            print(
-                "init_menu: no Clover access_token / merchant_id in Firestore; menu empty"
-            )
-            _hydrate_menu_from_raw({"items": {"elements": []}, "modifierGroups": {"elements": []}})
-            return
-
-        merchant_id = creds["merchant_id"]
-        base_url = str(creds.get("api_base_url") or settings.CLOVER_API_BASE_URL).rstrip("/")
-        access_token = await ensure_fresh_clover_access_token(
-            creds,
-            base_url,
-            doc.reference,
-            app_client_id=settings.CLOVER_APP_ID,
-        )
-        raw = await fetch_clover_menu(access_token, merchant_id, base_url)
-        raw["modifiers"] = await fetch_clover_modifiers(access_token, merchant_id, base_url)
-        _hydrate_menu_from_raw(raw)
-        await cache_set(f"menu:{merchant_id}", json.dumps(_items_by_name), ttl=300)
-        print(f"Menu loaded from Clover API: {len(_items_by_name)} items (merchant {merchant_id})")
-    except Exception as exc:
-        print(f"init_menu: Clover load failed ({exc!r}); menu empty")
-        _hydrate_menu_from_raw({"items": {"elements": []}, "modifierGroups": {"elements": []}})
+    print("init_menu: no RESTAURANT_ID at startup; menu will be loaded per-request")
+    _hydrate_menu_from_raw({"items": {"elements": []}, "modifierGroups": {"elements": []}})
 
 
 async def get_menu_item_names() -> list[str]:

@@ -30,7 +30,6 @@ class _FakeParsingAgent:
                 "parsing",
                 context.current_order_details.order_id,
                 tuple(context.latest_k_messages_by_customer),
-                context.summary_of_messages_before_k_by_customer,
                 context.most_recent_message,
                 context.session_id,
                 context.merchant_id,
@@ -75,7 +74,6 @@ class _FakeExecutionAgent:
                 context_object.merchant_id,
                 context_object.current_order_details.order_id,
                 tuple(context_object.latest_k_messages_by_customer),
-                context_object.summary_of_messages_before_k_by_customer,
             )
         )
         return ExecutionAgentResult(
@@ -119,18 +117,7 @@ def test_orchestrator_builds_server_side_context_and_calls_agents_in_order(monke
             "error": None,
         }
 
-    async def _fake_summarize_history(session_id: str, k: int):
-        assert session_id == "session-123"
-        assert k == orchestrator_mod.settings.DEFAULT_PREVIOUS_MESSAGES_K
-        return {
-            "success": True,
-            "summary": "older summary",
-            "messagesCovered": 2,
-            "cachedAt": None,
-            "error": None,
-        }
-
-    async def _fake_get_order_line_items(session_id: str):
+    async def _fake_get_order_line_items(session_id: str, creds=None):
         assert session_id == "session-123"
         return {
             "success": True,
@@ -151,22 +138,24 @@ def test_orchestrator_builds_server_side_context_and_calls_agents_in_order(monke
         orchestrator_mod, "getPreviousKMessages", _fake_get_previous_messages
     )
     monkeypatch.setattr(
-        orchestrator_mod, "summarizeConversationHistory", _fake_summarize_history
-    )
-    monkeypatch.setattr(
         orchestrator_mod, "getOrderLineItems", _fake_get_order_line_items
     )
     monkeypatch.setattr(
         orchestrator_mod,
         "prepare_clover_data",
-        lambda db, settings: asyncio.sleep(
-            0, result={"merchant_id": "merchant-from-creds", "token": "secret"}
+        lambda db, settings, merchant_id: asyncio.sleep(
+            0, result={"merchant_id": merchant_id, "token": "secret"}
         ),
     )
     monkeypatch.setattr(
         orchestrator_mod,
         "cache_list_append",
         lambda key, value: asyncio.sleep(0),
+    )
+    monkeypatch.setattr(
+        orchestrator_mod,
+        "saveClarificationAndIntent",
+        lambda session_id, clarification_questions, parsed_intents: asyncio.sleep(0),
     )
 
     response = asyncio.run(
@@ -184,7 +173,6 @@ def test_orchestrator_builds_server_side_context_and_calls_agents_in_order(monke
             "parsing",
             "order-7",
             ("first message", "second message"),
-            "older summary",
             "Need a burger",
             "session-123",
             "merchant-456",
@@ -195,10 +183,9 @@ def test_orchestrator_builds_server_side_context_and_calls_agents_in_order(monke
             ParsedRequestIntent.ADD_ITEM,
             "Need a burger",
             "session-123",
-            "merchant-from-creds",
+            "merchant-456",
             "order-7",
             ("first message", "second message"),
-            "older summary",
         ),
     ]
     assert response.system_response == "stubbed system response"
@@ -217,18 +204,7 @@ def test_orchestrator_uses_empty_defaults_when_context_fetch_fails(monkeypatch):
             "error": "redis down",
         }
 
-    async def _fake_summarize_history(session_id: str, k: int):
-        del session_id
-        del k
-        return {
-            "success": False,
-            "summary": "",
-            "messagesCovered": 0,
-            "cachedAt": None,
-            "error": "summary down",
-        }
-
-    async def _fake_get_order_line_items(session_id: str):
+    async def _fake_get_order_line_items(session_id: str, creds=None):
         del session_id
         return {
             "success": False,
@@ -240,9 +216,6 @@ def test_orchestrator_uses_empty_defaults_when_context_fetch_fails(monkeypatch):
 
     monkeypatch.setattr(
         orchestrator_mod, "getPreviousKMessages", _fake_get_previous_messages
-    )
-    monkeypatch.setattr(
-        orchestrator_mod, "summarizeConversationHistory", _fake_summarize_history
     )
     monkeypatch.setattr(
         orchestrator_mod, "getOrderLineItems", _fake_get_order_line_items
@@ -278,6 +251,5 @@ def test_orchestrator_uses_empty_defaults_when_context_fetch_fails(monkeypatch):
         raw_error="clover down",
     )
     assert context.latest_k_messages_by_customer == []
-    assert context.summary_of_messages_before_k_by_customer == ""
     assert prepared.clover_error == "creds down"
     assert prepared.latest_customer_message == "Need a burger"

@@ -111,9 +111,9 @@ class ChatbotResponse(BaseModel):
 
 
 class ChatbotV2MessageRequest(BaseModel):
-    user_message: str = Field(..., min_length=1, max_length=1000)
-    session_id: str = Field(..., min_length=1, max_length=255)
-    merchant_id: str = Field(..., min_length=1, max_length=255)
+    user_message: str 
+    session_id: str 
+    merchant_id: str | None = None
 
 
 class ChatbotV2MessageResponse(BaseModel):
@@ -185,18 +185,16 @@ class CurrentOrderDetails(BaseModel):
 
 class ParsingAgentContext(BaseModel):
     session_id: str
-    merchant_id: str
+    merchant_id: str | None = None
     current_order_details: CurrentOrderDetails
     most_recent_message: str
     latest_k_messages_by_customer: list[str]
-    summary_of_messages_before_k_by_customer: str
 
 
 class ParsingAgentPromptContext(BaseModel):
     current_order_details: dict[str, Any]
     most_recent_message_by_customer: str
     latest_k_messages_by_customer: list[str]
-    summary_of_messages_before_k_by_customer: str
 
 
 class ParsingAgentResult(BaseModel):
@@ -206,18 +204,17 @@ class ParsingAgentResult(BaseModel):
 
 class ExecutionAgentContext(BaseModel):
     session_id: str
-    merchant_id: str
+    merchant_id: str | None = None
     clover_creds: dict[str, Any] | None = None
     clover_error: str | None = None
 
 
 class PreparedExecutionContext(BaseModel):
     session_id: str
-    merchant_id: str
+    merchant_id: str | None = None
     latest_customer_message: str
     current_order_details: CurrentOrderDetails
     latest_k_messages_by_customer: list[str]
-    summary_of_messages_before_k_by_customer: str
     clover_creds: dict[str, Any] | None = None
     clover_error: str | None = None
 
@@ -231,6 +228,7 @@ class ExecutionAgentPromptContext(BaseModel):
     context_object: dict[str, Any]
     parsed_requests: list[dict[str, Any]]
     tools: list[dict[str, Any]]
+    previous_clarification_and_intent: dict[str, Any] | None = None
 
 
 class ExecutionAgentResult(BaseModel):

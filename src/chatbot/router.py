@@ -12,8 +12,8 @@ from src.chatbot.schema import (
     TestResultsSaveRequest,
 )
 
-router = APIRouter(prefix="/chatbot", tags=["chatbot"])
-v2_router = APIRouter(prefix="/api/bot", tags=["chatbot"])
+router = APIRouter(prefix="/api/bot", tags=["chatbot"])
+v2_router = APIRouter(prefix="/chatbot/v2", tags=["chatbot"])
 
 
 @router.post("/message")

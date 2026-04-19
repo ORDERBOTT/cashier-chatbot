@@ -1,9 +1,12 @@
 import asyncio
 
+import pytest
+
 from src.chatbot import gemini_client
 from src.chatbot import orchestrator as orchestrator_mod
+from src.chatbot.exceptions import AIServiceError
 from src.chatbot.gemini_client import GeminiFunctionTool
-from src.chatbot.orchestrator import ExecutionAgent, ExecutionTracker
+from src.chatbot.orchestrator import ExecutionAgent
 from src.chatbot.schema import (
     CurrentOrderDetails,
     CurrentOrderLineItem,
@@ -32,7 +35,6 @@ def _context_object(
             raw_error=None,
         ),
         latest_k_messages_by_customer=["hello"],
-        summary_of_messages_before_k_by_customer="",
         clover_creds=None,
         clover_error=None,
     )
@@ -72,20 +74,45 @@ def _tool(name: str, handler, description: str = "tool") -> GeminiFunctionTool:
     )
 
 
+def _mock_save_clarification(monkeypatch):
+    monkeypatch.setattr(
+        orchestrator_mod,
+        "saveClarificationAndIntent",
+        lambda session_id, clarification_questions, parsed_intents: __import__(
+            "asyncio"
+        ).sleep(0),
+    )
+
+
+def _mock_get_clarification(monkeypatch):
+    async def fake_get(session_id):
+        return {
+            "success": False,
+            "clarification_questions": "",
+            "parsed_intents": [],
+            "saved_at": None,
+            "error": "not found",
+        }
+
+    monkeypatch.setattr(orchestrator_mod, "getClarificationAndIntent", fake_get)
+
+
 def test_execution_agent_adds_item_and_records_tracker(monkeypatch):
     """LLM calls addItemsToOrder; tracker records the action."""
 
-    async def fake_generate(messages, *, function_tools, temperature, max_tool_calls, **kwargs):
+    async def fake_generate(
+        messages, *, function_tools, temperature, max_tool_calls, **kwargs
+    ):
         handlers = {t.name: t.handler for t in function_tools}
-        await handlers["addItemsToOrder"](
-            items=[{"itemId": "item-1", "quantity": 1}]
-        )
+        await handlers["addItemsToOrder"](items=[{"itemId": "item-1", "quantity": 1}])
         return "Added 1 x Burger."
 
     monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
 
     # Patch addItemsToOrder in orchestrator module so it returns a known result
-    async def fake_add(session_id, items):
+    async def fake_add(session_id, items, creds=None):
         return {
             "success": True,
             "addedItems": [{"name": "Burger", "quantity": 1}],
@@ -112,10 +139,14 @@ def test_execution_agent_adds_item_and_records_tracker(monkeypatch):
 def test_execution_agent_returns_pending_clarification_for_low_confidence(monkeypatch):
     """Low-confidence items are extracted from parsed_requests before the LLM call."""
 
-    async def fake_generate(messages, *, function_tools, temperature, max_tool_calls, **kwargs):
+    async def fake_generate(
+        messages, *, function_tools, temperature, max_tool_calls, **kwargs
+    ):
         return "Can you clarify that request?"
 
     monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
 
     agent = ExecutionAgent(system_prompt="")
     result = asyncio.run(
@@ -139,7 +170,9 @@ def test_execution_agent_returns_pending_clarification_for_low_confidence(monkey
 def test_execution_agent_replaces_item_and_records_tracker(monkeypatch):
     """LLM calls replaceItemInOrder; tracker records replaced action."""
 
-    async def fake_generate(messages, *, function_tools, temperature, max_tool_calls, **kwargs):
+    async def fake_generate(
+        messages, *, function_tools, temperature, max_tool_calls, **kwargs
+    ):
         handlers = {t.name: t.handler for t in function_tools}
         await handlers["replaceItemInOrder"](
             replacement={"itemId": "item-rings", "quantity": 1},
@@ -149,16 +182,25 @@ def test_execution_agent_replaces_item_and_records_tracker(monkeypatch):
 
     monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
 
-    async def fake_replace(session_id, replacement, *, lineItemId=None, orderPosition=None, itemName=None):
+    async def fake_replace(
+        session_id, replacement, *, lineItemId=None, orderPosition=None, itemName=None, creds=None
+    ):
         return {
             "success": True,
             "removedItem": {"name": "Regular Fries", "quantity": 1},
-            "addedItem": {"name": "Onion Rings", "quantity": 1, "modifiersApplied": [], "lineTotal": 399},
+            "addedItem": {
+                "name": "Onion Rings",
+                "quantity": 1,
+                "modifiersApplied": [],
+                "lineTotal": 399,
+            },
             "updatedOrderTotal": 399,
             "error": None,
         }
 
     monkeypatch.setattr(orchestrator_mod, "replaceItemInOrder", fake_replace)
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
 
     agent = ExecutionAgent(system_prompt="")
     result = asyncio.run(
@@ -169,7 +211,9 @@ def test_execution_agent_replaces_item_and_records_tracker(monkeypatch):
                 details="onion rings",
                 request_details="swap fries for onion rings",
             ),
-            context_object=_context_object(latest_customer_message="swap fries for onion rings"),
+            context_object=_context_object(
+                latest_customer_message="swap fries for onion rings"
+            ),
         )
     )
 
@@ -181,14 +225,16 @@ def test_execution_agent_replaces_item_and_records_tracker(monkeypatch):
 def test_execution_agent_removes_item_and_records_tracker(monkeypatch):
     """LLM calls removeItemFromOrder; tracker records removed action."""
 
-    async def fake_generate(messages, *, function_tools, temperature, max_tool_calls, **kwargs):
+    async def fake_generate(
+        messages, *, function_tools, temperature, max_tool_calls, **kwargs
+    ):
         handlers = {t.name: t.handler for t in function_tools}
         await handlers["removeItemFromOrder"](target={"itemName": "Fries"})
         return "Removed Fries."
 
     monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
 
-    async def fake_remove(session_id, target):
+    async def fake_remove(session_id, target, creds=None):
         return {
             "success": True,
             "removedItem": {"name": "Fries", "quantity": 1},
@@ -196,6 +242,8 @@ def test_execution_agent_removes_item_and_records_tracker(monkeypatch):
         }
 
     monkeypatch.setattr(orchestrator_mod, "removeItemFromOrder", fake_remove)
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
 
     agent = ExecutionAgent(system_prompt="")
     result = asyncio.run(
@@ -217,7 +265,9 @@ def test_execution_agent_removes_item_and_records_tracker(monkeypatch):
 def test_execution_agent_confirm_order_records_tracker(monkeypatch):
     """LLM calls confirmOrder; tracker records confirmed order."""
 
-    async def fake_generate(messages, *, function_tools, temperature, max_tool_calls, **kwargs):
+    async def fake_generate(
+        messages, *, function_tools, temperature, max_tool_calls, **kwargs
+    ):
         handlers = {t.name: t.handler for t in function_tools}
         await handlers["calcOrderPrice"]()
         await handlers["confirmOrder"]()
@@ -225,14 +275,21 @@ def test_execution_agent_confirm_order_records_tracker(monkeypatch):
 
     monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
 
-    async def fake_calc(session_id):
+    async def fake_calc(session_id, creds=None):
         return {"success": True, "total": 1165, "error": None}
 
-    async def fake_confirm(session_id):
-        return {"success": True, "orderId": "order-1", "finalTotal": 1165, "error": None}
+    async def fake_confirm(session_id, creds=None):
+        return {
+            "success": True,
+            "orderId": "order-1",
+            "finalTotal": 1165,
+            "error": None,
+        }
 
     monkeypatch.setattr(orchestrator_mod, "calcOrderPrice", fake_calc)
     monkeypatch.setattr(orchestrator_mod, "confirmOrder", fake_confirm)
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
 
     agent = ExecutionAgent(system_prompt="")
     result = asyncio.run(
@@ -245,7 +302,11 @@ def test_execution_agent_confirm_order_records_tracker(monkeypatch):
             ),
             context_object=_context_object(
                 latest_customer_message="yes",
-                line_items=[CurrentOrderLineItem(line_item_id="1", name="Burger", quantity=1, price=1099)],
+                line_items=[
+                    CurrentOrderLineItem(
+                        line_item_id="1", name="Burger", quantity=1, price=1099
+                    )
+                ],
             ),
         )
     )
@@ -258,17 +319,21 @@ def test_execution_agent_confirm_order_records_tracker(monkeypatch):
 def test_execution_agent_cancel_order_records_tracker(monkeypatch):
     """LLM calls cancelOrder; tracker records cancelled order."""
 
-    async def fake_generate(messages, *, function_tools, temperature, max_tool_calls, **kwargs):
+    async def fake_generate(
+        messages, *, function_tools, temperature, max_tool_calls, **kwargs
+    ):
         handlers = {t.name: t.handler for t in function_tools}
         await handlers["cancelOrder"]()
         return "Your order has been cancelled."
 
     monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
 
-    async def fake_cancel(session_id):
+    async def fake_cancel(session_id, creds=None):
         return {"success": True, "error": None}
 
     monkeypatch.setattr(orchestrator_mod, "cancelOrder", fake_cancel)
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
 
     agent = ExecutionAgent(system_prompt="")
     result = asyncio.run(
@@ -291,7 +356,9 @@ def test_execution_agent_cancel_order_records_tracker(monkeypatch):
 def test_execution_agent_update_item_records_tracker(monkeypatch):
     """LLM calls updateItemInOrder; tracker records updated action."""
 
-    async def fake_generate(messages, *, function_tools, temperature, max_tool_calls, **kwargs):
+    async def fake_generate(
+        messages, *, function_tools, temperature, max_tool_calls, **kwargs
+    ):
         handlers = {t.name: t.handler for t in function_tools}
         await handlers["updateItemInOrder"](
             target={"itemName": "Burger"},
@@ -301,10 +368,17 @@ def test_execution_agent_update_item_records_tracker(monkeypatch):
 
     monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
 
-    async def fake_update(session_id, target, updates):
-        return {"success": True, "itemName": "Burger", "appliedChanges": "modifier added", "error": None}
+    async def fake_update(session_id, target, updates, creds=None):
+        return {
+            "success": True,
+            "itemName": "Burger",
+            "appliedChanges": "modifier added",
+            "error": None,
+        }
 
     monkeypatch.setattr(orchestrator_mod, "updateItemInOrder", fake_update)
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
 
     agent = ExecutionAgent(system_prompt="")
     result = asyncio.run(
@@ -327,7 +401,9 @@ def test_execution_agent_update_item_records_tracker(monkeypatch):
 def test_execution_agent_change_quantity_records_tracker(monkeypatch):
     """LLM calls changeItemQuantity; tracker records changed action."""
 
-    async def fake_generate(messages, *, function_tools, temperature, max_tool_calls, **kwargs):
+    async def fake_generate(
+        messages, *, function_tools, temperature, max_tool_calls, **kwargs
+    ):
         handlers = {t.name: t.handler for t in function_tools}
         await handlers["changeItemQuantity"](
             target={"itemName": "Burger"},
@@ -337,10 +413,12 @@ def test_execution_agent_change_quantity_records_tracker(monkeypatch):
 
     monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
 
-    async def fake_change(session_id, target, new_quantity):
+    async def fake_change(session_id, target, new_quantity, creds=None):
         return {"success": True, "itemName": "Burger", "newQuantity": 3, "error": None}
 
     monkeypatch.setattr(orchestrator_mod, "changeItemQuantity", fake_change)
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
 
     agent = ExecutionAgent(system_prompt="")
     result = asyncio.run(
@@ -363,10 +441,14 @@ def test_execution_agent_change_quantity_records_tracker(monkeypatch):
 def test_execution_agent_no_mutations_when_llm_does_not_call_tools(monkeypatch):
     """If the LLM returns without calling any tools, tracker stays empty."""
 
-    async def fake_generate(messages, *, function_tools, temperature, max_tool_calls, **kwargs):
+    async def fake_generate(
+        messages, *, function_tools, temperature, max_tool_calls, **kwargs
+    ):
         return "What would you like to order?"
 
     monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
 
     agent = ExecutionAgent(system_prompt="")
     result = asyncio.run(
@@ -404,6 +486,8 @@ def test_execution_agent_uses_execution_prompt_with_text_tool_calling(monkeypatc
     monkeypatch.setattr(
         gemini_client, "generate_text_with_tools", _fake_generate_text_with_tools
     )
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
 
     agent = ExecutionAgent()
     result = asyncio.run(
@@ -429,20 +513,19 @@ def test_execution_agent_uses_execution_prompt_with_text_tool_calling(monkeypatc
     )
     assert '"parsed_requests"' in observed["messages"][1]["content"]
     assert '"tools"' in observed["messages"][1]["content"]
-    # All 18 tools are passed to LLM
-    assert len(observed["function_tools"]) == 18
+    # All 14 tools are passed to LLM
+    assert len(observed["function_tools"]) == 14
 
 
 def test_execution_agent_system_prompt_contains_validation_tool_rules():
     from src.chatbot.promptsv2 import DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT
 
     prompt = DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT
-    assert "findClosestMenuItems" in prompt
-    assert "validateModifications" in prompt
-    assert "checkIfModifierOrAddOn" in prompt
-    assert "checkItemAvailability" in prompt
+    assert "validateRequestedItem" in prompt
+    assert "validateRequestedItem — details string:" in prompt
     assert "TOOL CALLING RULES" in prompt
     assert "NEVER call mutation tools" in prompt
+    assert "Do you want to add anything else?" in prompt
 
 
 def test_execution_agent_passes_all_tools_to_llm(monkeypatch):
@@ -464,6 +547,8 @@ def test_execution_agent_passes_all_tools_to_llm(monkeypatch):
     monkeypatch.setattr(
         gemini_client, "generate_text_with_tools", _fake_generate_text_with_tools
     )
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
 
     agent = ExecutionAgent()
     asyncio.run(
@@ -478,11 +563,7 @@ def test_execution_agent_passes_all_tools_to_llm(monkeypatch):
     )
 
     expected_tools = [
-        "findClosestMenuItems",
-        "checkItemAvailability",
-        "getItemDetails",
-        "validateModifications",
-        "checkIfModifierOrAddOn",
+        "validateRequestedItem",
         "addItemsToOrder",
         "replaceItemInOrder",
         "removeItemFromOrder",
@@ -500,30 +581,34 @@ def test_execution_agent_passes_all_tools_to_llm(monkeypatch):
     assert observed["tool_names"] == expected_tools
 
 
-def test_execution_agent_build_tools_passes_runtime_creds_to_find_closest_menu_items(
+def test_execution_agent_build_tools_passes_runtime_creds_to_validate_requested_item(
     monkeypatch,
 ):
     observed: dict[str, object] = {}
 
-    async def _fake_find_closest_menu_items(
+    async def _fake_validate_requested_item(
         *,
-        item_name: str,
+        itemName: str,
         details: str | None = None,
         merchant_id: str | None = None,
         creds: dict | None = None,
     ) -> dict:
-        observed["item_name"] = item_name
+        observed["itemName"] = itemName
         observed["details"] = details
         observed["merchant_id"] = merchant_id
         observed["creds"] = creds
         return {
-            "exact_match": {"id": "item-1", "name": "Burger"},
+            "exactMatch": {"id": "item-1", "name": "Burger"},
             "candidates": [{"id": "item-1", "name": "Burger"}],
-            "match_confidence": "exact",
+            "matchConfidence": "exact",
+            "itemId": "item-1",
+            "available": True,
+            "allValid": True,
+            "error": None,
         }
 
     monkeypatch.setattr(
-        orchestrator_mod, "findClosestMenuItems", _fake_find_closest_menu_items
+        orchestrator_mod, "validateRequestedItem", _fake_validate_requested_item
     )
 
     tools = ExecutionAgent(system_prompt="").build_tools(
@@ -539,19 +624,19 @@ def test_execution_agent_build_tools_passes_runtime_creds_to_find_closest_menu_i
 
     payload = asyncio.run(
         tools[0].handler(
-            item_name="burger",
+            itemName="burger",
             details="spicy",
         )
     )
 
-    assert observed["item_name"] == "burger"
+    assert observed["itemName"] == "burger"
     assert observed["details"] == "spicy"
     assert observed["merchant_id"] == "merchant-from-creds"
     assert observed["creds"] == {
         "merchant_id": "merchant-from-creds",
         "token": "secret",
     }
-    assert payload["match_confidence"] == "exact"
+    assert payload["matchConfidence"] == "exact"
 
 
 def test_execution_agent_build_tools_registers_extended_toolset():
@@ -567,11 +652,7 @@ def test_execution_agent_build_tools_registers_extended_toolset():
     )
 
     assert [tool.name for tool in tools] == [
-        "findClosestMenuItems",
-        "checkItemAvailability",
-        "getItemDetails",
-        "validateModifications",
-        "checkIfModifierOrAddOn",
+        "validateRequestedItem",
         "addItemsToOrder",
         "replaceItemInOrder",
         "removeItemFromOrder",
@@ -588,10 +669,106 @@ def test_execution_agent_build_tools_registers_extended_toolset():
     ]
 
 
+class _FakeGemini503(Exception):
+    """Mimics ``google.genai.errors.ServerError`` exposing HTTP status as ``code``."""
+
+    code = 503
+
+
+def test_execution_agent_retries_gemini_503_then_succeeds(monkeypatch):
+    monkeypatch.setattr(orchestrator_mod, "_GEMINI_503_BACKOFF_SEC", 0.0)
+    calls = 0
+
+    async def fake_generate(
+        messages, *, function_tools, temperature, max_tool_calls, **kwargs
+    ):
+        nonlocal calls
+        del messages, function_tools, temperature, max_tool_calls, kwargs
+        calls += 1
+        if calls < 3:
+            raise AIServiceError(
+                "Gemini request failed: overloaded"
+            ) from _FakeGemini503()
+        return "Recovered after outages."
+
+    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
+
+    agent = ExecutionAgent(system_prompt="")
+    result = asyncio.run(
+        agent.run(
+            parsed_requests=_request(intent=ParsedRequestIntent.GREETING),
+            context_object=_context_object(),
+        )
+    )
+
+    assert calls == 3
+    assert result.agent_reply == "Recovered after outages."
+
+
+def test_execution_agent_stops_after_ten_gemini_503_attempts(monkeypatch):
+    monkeypatch.setattr(orchestrator_mod, "_GEMINI_503_BACKOFF_SEC", 0.0)
+    calls = 0
+
+    async def fake_generate(
+        messages, *, function_tools, temperature, max_tool_calls, **kwargs
+    ):
+        nonlocal calls
+        del messages, function_tools, temperature, max_tool_calls, kwargs
+        calls += 1
+        raise AIServiceError("Gemini request failed: unavailable") from _FakeGemini503()
+
+    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
+
+    agent = ExecutionAgent(system_prompt="")
+
+    with pytest.raises(AIServiceError, match="Gemini request failed"):
+        asyncio.run(
+            agent.run(
+                parsed_requests=_request(intent=ParsedRequestIntent.GREETING),
+                context_object=_context_object(),
+            )
+        )
+
+    assert calls == 10
+
+
+def test_execution_agent_does_not_retry_non_503_gemini_errors(monkeypatch):
+    monkeypatch.setattr(orchestrator_mod, "_GEMINI_503_BACKOFF_SEC", 0.0)
+    calls = 0
+
+    async def fake_generate(
+        messages, *, function_tools, temperature, max_tool_calls, **kwargs
+    ):
+        nonlocal calls
+        del messages, function_tools, temperature, max_tool_calls, kwargs
+        calls += 1
+        raise AIServiceError("Gemini request failed: rate limited") from RuntimeError()
+
+    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    _mock_save_clarification(monkeypatch)
+    _mock_get_clarification(monkeypatch)
+
+    agent = ExecutionAgent(system_prompt="")
+
+    with pytest.raises(AIServiceError, match="Gemini request failed"):
+        asyncio.run(
+            agent.run(
+                parsed_requests=_request(intent=ParsedRequestIntent.GREETING),
+                context_object=_context_object(),
+            )
+        )
+
+    assert calls == 1
+
+
 def test_execution_tracker_mutated_by_tool_wrappers(monkeypatch):
     """ExecutionTracker is mutated when tool wrappers fire on success."""
 
-    async def fake_add(session_id, items):
+    async def fake_add(session_id, items, creds=None):
         return {
             "success": True,
             "addedItems": [{"name": "Burger", "quantity": 2}],

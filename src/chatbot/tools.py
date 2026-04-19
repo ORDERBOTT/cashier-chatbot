@@ -20,6 +20,8 @@ from src.cache import (
 )
 from src.chatbot.cart.ai_client import classify_modifier_or_addon_request
 from src.chatbot.clarification.constants import (
+    AMBIGUITY_GAP,
+    CONFIRMED_THRESHOLD,
     LOW_MENU_MATCH_THRESHOLD,
     MODS_CONFIRMED_THRESHOLD,
     NOT_FOUND_THRESHOLD,
@@ -59,24 +61,35 @@ from src.chatbot.utils import _normalize_order_line_items, _line_item_quantity, 
 from src.chatbot.utils import _item_not_found_result, _availability_result, _describe_update_changes, _pricing_breakdown_from_order 
 
 
-async def prepare_clover_data(db, settings) -> dict:
+async def prepare_clover_data(db, settings, merchant_id: str) -> dict:
     """Fetch Clover credentials, refresh token if needed, and return an enriched creds dict.
 
     Adds ``base_url`` and ``token`` keys to the Firestore creds dict so callers
     can pass a single ``creds`` object everywhere.
     """
-    snapshot = await _clover_integration_doc(db, settings.MERCHANT_ID)
+    print(f"[prepare_clover_data] fetching doc for merchant_id={merchant_id!r}")
+    snapshot = await _clover_integration_doc(db, merchant_id)
     creds = snapshot.to_dict() or {}
+    print(
+        f"[prepare_clover_data] doc exists={snapshot.exists} "
+        f"fields={list(creds.keys())} "
+        f"has_access_token={bool(creds.get('access_token'))} "
+        f"has_refresh_token={bool(creds.get('refresh_token'))} "
+        f"has_client_id={bool(creds.get('client_id'))} "
+        f"CLOVER_APP_ID_set={bool(settings.CLOVER_APP_ID)}"
+    )
 
     base_url = str(creds.get("api_base_url") or settings.CLOVER_API_BASE_URL).rstrip(
         "/"
     )
+    print(f"[prepare_clover_data] base_url={base_url!r}")
     token = await ensure_fresh_clover_access_token(
         creds,
         base_url,
         snapshot.reference,
         app_client_id=settings.CLOVER_APP_ID,
     )
+    print(f"[prepare_clover_data] token_acquired=True merchant_id={creds.get('merchant_id')!r}")
 
     creds["base_url"] = base_url
     creds["token"] = token
@@ -159,12 +172,7 @@ async def findClosestMenuItems(
     try:
         resolved_creds = creds
         if resolved_creds is None:
-            db = _firebase.firebaseDatabase
-            resolved_creds = await prepare_clover_data(db, settings)
-            print(
-                "[findClosestMenuItems] after prepare_clover_data "
-                f"merchant_id={resolved_creds.get('merchant_id')!r}"
-            )
+            raise ValueError("creds must be provided")
         else:
             print(
                 "[findClosestMenuItems] using provided creds "
@@ -229,7 +237,26 @@ def _find_closest_menu_items_from_menu(
         )
         return _no_match
 
+    best_score = top_matches[0][1]
     candidates = _build_candidates(top_matches, details, items_by_name)
+
+    # If the top fuzzy match is high-confidence with no close competitor, auto-confirm
+    # it as exact — mirrors FuzzyMatcher.match_item which confirms at CONFIRMED_THRESHOLD.
+    # This handles plurals/typos like "chicken sandos" → "Chicken Sando".
+    close_competitors = [m for m in top_matches[1:] if best_score - m[1] <= AMBIGUITY_GAP]
+    if best_score >= CONFIRMED_THRESHOLD and not close_competitors:
+        auto_exact = _get_local_item(top_matches[0][0], items_by_name)
+        if auto_exact is not None:
+            print(
+                "[findClosestMenuItems] return exact (auto-confirmed) "
+                f"score={best_score!r} top_name={top_matches[0][0]!r}"
+            )
+            return {
+                "exact_match": auto_exact,
+                "candidates": candidates,
+                "match_confidence": "exact",
+            }
+
     print(
         "[findClosestMenuItems] return close "
         f"candidate_count={len(candidates)} top_name={top_matches[0][0]!r}"
@@ -968,7 +995,374 @@ async def checkIfModifierOrAddOn(
     return result
 
 
-async def addItemsToOrder(session_id: str, items: list[dict] | None = None) -> dict:
+async def validateRequestedItem(
+    itemName: str,
+    details: str | None = None,
+    merchant_id: str | None = None,  # noqa: ARG001 — reserved for future multi-tenant routing
+    creds: dict | None = None,
+) -> dict:
+    """Resolve, validate, and classify a customer's item request in one call.
+
+    Use this as the single entry point whenever the parsing agent has extracted
+    an ``itemName`` (and optional ``details``) from the customer message and the
+    execution agent needs to decide whether/how to add that item to the order.
+    This replaces four sequential tool calls
+    (findClosestMenuItems → getItemDetails → checkItemAvailability →
+    validateModifications / checkIfModifierOrAddOn) with one.
+
+    Args:
+        itemName:
+            The item name exactly as extracted from the customer message
+            (e.g. "chiken burgar", "wings", "Chicken Sandwich").
+            Do NOT normalise spelling before passing — the fuzzy matcher handles it.
+        details:
+            Any modifiers or qualifiers the customer attached
+            (e.g. "lemon pepper, extra crispy").
+            Pass ``None`` when absent. The string is split on commas and
+            semicolons internally; do NOT pre-split.
+
+    Returns a dict with the following fields (all always present; ``None`` when
+    the step was skipped because an earlier step returned a non-exact result):
+
+        exactMatch (dict | None)
+            Full menu item row when matchConfidence is ``"exact"``; else ``None``.
+
+        candidates (list[dict])
+            Top 2-3 fuzzy matches. Populated for ``"exact"`` and ``"close"``;
+            empty list for ``"none"``.
+
+        matchConfidence ("exact" | "close" | "none")
+            ``"exact"``  — item found verbatim; proceed with exactMatch.
+            ``"close"``  — ambiguous; ask the customer to confirm which item
+                           they meant before adding.
+            ``"none"``   — item not on the menu; tell the customer it is unavailable.
+
+        itemId (str | None)
+            Clover item UUID; populated only when matchConfidence is ``"exact"``.
+
+        merchantId (str | None)
+            Clover merchant UUID; populated only when matchConfidence is ``"exact"``.
+
+        available (bool | None)
+            Whether the item is currently orderable.
+            ``None`` when matchConfidence is not ``"exact"``.
+
+        valid (list[dict] | None)
+            Matched modifier rows (with modifierId, name, price, groupId,
+            groupName, requested).
+            ``None`` when the item is unavailable or matchConfidence is not ``"exact"``.
+
+        invalid (list[str] | None)
+            Raw modifier strings that could not be matched AND are not notes.
+            ``None`` when the item is unavailable or matchConfidence is not ``"exact"``.
+
+        asNote (list[str] | None)
+            Modifier strings that failed exact matching but are valid free-text
+            notes (checkIfModifierOrAddOn returned isAddon=True and suggestedNote).
+            ``None`` when the item is unavailable or matchConfidence is not ``"exact"``.
+
+        requireChoice (list[dict] | None)
+            Required modifier groups that still need a selection from the customer.
+            ``None`` when the item is unavailable or matchConfidence is not ``"exact"``.
+
+        allValid (bool | None)
+            ``True`` only when ``invalid`` is empty and ``requireChoice`` is empty.
+            ``None`` when the item is unavailable or matchConfidence is not ``"exact"``.
+
+        isModifierOrAddon (bool | None)
+            Reserved; always ``None`` (matchConfidence ``"none"`` case is
+            handled by the agent directly without a further tool call).
+
+        classification (str | None)
+            Reserved; always ``None``.
+
+        closestModifier (dict | None)
+            Reserved; always ``None``.
+
+    Decision guide for the agent:
+
+        matchConfidence == "none"
+            Item not on the menu. Tell the customer the item is unavailable
+            and suggest browsing the menu. All downstream fields are ``None``.
+
+        matchConfidence == "close"
+            Ambiguous match. Show ``candidates[0]`` (and optionally
+            ``candidates[1]``) and ask "Did you mean X?" before adding.
+            All downstream fields are ``None``.
+
+        matchConfidence == "exact" and available == False
+            Item exists but cannot be ordered. Tell the customer it is
+            currently unavailable. ``valid``/``invalid``/``asNote``/
+            ``requireChoice``/``allValid`` are all ``None``.
+
+        matchConfidence == "exact" and available == True and allValid == True
+            Safe to add the item. Use ``itemId`` and the ``valid`` modifier
+            list (plus ``asNote`` strings as the line-item note) when calling
+            addItemsToOrder.
+
+        matchConfidence == "exact" and available == True and non-empty invalid
+            One or more modifications could not be resolved. Ask the customer
+            to clarify what they meant.
+
+        matchConfidence == "exact" and available == True and non-empty requireChoice
+            One or more required modifier groups are missing a selection. Prompt
+            the customer to choose from those groups before adding.
+
+        matchConfidence == "exact" and available == True and non-empty asNote
+            The modification is a note variant (e.g. "extra crispy"). Include
+            those strings joined as the line-item note when calling addItemsToOrder.
+    """
+    print(
+        "[validateRequestedItem] start "
+        f"itemName={itemName!r} details={details!r}"
+    )
+
+    _null_downstream: dict = {
+        "itemId": None,
+        "merchantId": None,
+        "available": None,
+        "valid": None,
+        "invalid": None,
+        "asNote": None,
+        "requireChoice": None,
+        "allValid": None,
+        "isModifierOrAddon": None,
+        "classification": None,
+        "closestModifier": None,
+    }
+
+    try:
+        resolved_creds = creds
+        if resolved_creds is None:
+            raise ValueError("creds must be provided")
+        else:
+            print(
+                "[validateRequestedItem] using provided creds "
+                f"merchant_id={resolved_creds.get('merchant_id')!r}"
+            )
+
+        menu_items = await _menu_items_cached_or_fresh(resolved_creds)
+        print(
+            "[validateRequestedItem] menu loaded "
+            f"by_id_count={len(menu_items.get('by_id', {}))}"
+        )
+
+        match_result = _find_closest_menu_items_from_menu(
+            item_name=itemName,
+            details=details,
+            menu_items=menu_items,
+        )
+        exact_match = match_result.get("exact_match")
+        candidates = match_result.get("candidates", [])
+        match_confidence = match_result.get("match_confidence", "none")
+        print(
+            "[validateRequestedItem] match result "
+            f"matchConfidence={match_confidence!r} "
+            f"exactMatch_id={(exact_match.get('id') if exact_match else None)!r} "
+            f"candidate_count={len(candidates)}"
+        )
+
+        base = {
+            "exactMatch": exact_match,
+            "candidates": candidates,
+            "matchConfidence": match_confidence,
+        }
+
+        if match_confidence != "exact":
+            print(
+                "[validateRequestedItem] return early "
+                f"matchConfidence={match_confidence!r}"
+            )
+            return {**base, **_null_downstream}
+
+        # --- exact match branch ---
+        item_id = str(exact_match.get("id", "")).strip()
+        merchant_id = str(creds.get("merchant_id", "")).strip()
+        by_id = menu_items.get("by_id", {})
+        item_row = by_id.get(item_id) or exact_match
+
+        available = bool(item_row.get("available", True))
+        print(
+            "[validateRequestedItem] availability check "
+            f"itemId={item_id!r} available={available!r}"
+        )
+
+        if not available:
+            print("[validateRequestedItem] return unavailable")
+            return {
+                **base,
+                "itemId": item_id,
+                "merchantId": merchant_id,
+                "available": False,
+                "valid": None,
+                "invalid": None,
+                "asNote": None,
+                "requireChoice": None,
+                "allValid": None,
+                "isModifierOrAddon": None,
+                "classification": None,
+                "closestModifier": None,
+            }
+
+        # --- available; validate modifiers ---
+        flattened_options = _flatten_item_modifier_options(item_row)
+        print(
+            "[validateRequestedItem] flattened_options "
+            f"count={len(flattened_options)}"
+        )
+
+        if not details:
+            require_choice = _required_modifier_groups(item_row, set())
+            result = {
+                **base,
+                "itemId": item_id,
+                "merchantId": merchant_id,
+                "available": True,
+                "valid": [],
+                "invalid": [],
+                "asNote": [],
+                "requireChoice": require_choice,
+                "allValid": len(require_choice) == 0,
+                "isModifierOrAddon": None,
+                "classification": None,
+                "closestModifier": None,
+            }
+            print(f"[validateRequestedItem] return no_details result={result!r}")
+            return result
+
+        raw_mods = [
+            m.strip()
+            for part in details.replace(";", ",").split(",")
+            if (m := part.strip())
+        ]
+        print(f"[validateRequestedItem] raw_mods={raw_mods!r}")
+
+        valid: list[dict] = []
+        initially_invalid: list[str] = []
+        selected_keys: set[tuple[str, str]] = set()
+
+        for raw_mod in raw_mods:
+            match = _match_requested_modifier(raw_mod, flattened_options)
+            if match is None:
+                initially_invalid.append(raw_mod)
+                print(
+                    "[validateRequestedItem] modifier no_match "
+                    f"raw={raw_mod!r}"
+                )
+                continue
+
+            selection_key = (match["groupId"], match["modifierId"])
+            if selection_key in selected_keys:
+                print(
+                    "[validateRequestedItem] modifier duplicate_skipped "
+                    f"selection_key={selection_key!r}"
+                )
+                continue
+
+            selected_keys.add(selection_key)
+            valid.append(
+                {
+                    "requested": raw_mod,
+                    "modifierId": match["modifierId"],
+                    "name": match["name"],
+                    "price": match["price"],
+                    "groupId": match["groupId"],
+                    "groupName": match["groupName"],
+                }
+            )
+
+        require_choice = _required_modifier_groups(item_row, selected_keys)
+
+        # --- classify initially_invalid mods as note or truly invalid ---
+        as_note: list[str] = []
+        truly_invalid: list[str] = []
+        item_name_str = str(item_row.get("name", "")).strip()
+        modifier_groups = _item_modifier_groups(item_row)
+
+        for raw_mod in initially_invalid:
+            cleaned = _clean_modifier_request(raw_mod)
+            if not cleaned:
+                continue
+
+            candidates_for_addon = _modifier_or_addon_candidates(
+                cleaned, flattened_options
+            )
+            print(
+                "[validateRequestedItem] addon_check "
+                f"raw={raw_mod!r} candidates_count={len(candidates_for_addon)}"
+            )
+
+            if not candidates_for_addon:
+                truly_invalid.append(raw_mod)
+                print(
+                    "[validateRequestedItem] addon_no_candidates → invalid "
+                    f"raw={raw_mod!r}"
+                )
+                continue
+
+            try:
+                classification_result = await classify_modifier_or_addon_request(
+                    item_name=item_name_str,
+                    requested_modification=cleaned,
+                    candidate_modifiers=candidates_for_addon,
+                    modifier_groups=modifier_groups,
+                )
+            except AIServiceError as exc:
+                print(
+                    "[validateRequestedItem] addon_classification_failed "
+                    f"raw={raw_mod!r} exc={exc!r}"
+                )
+                truly_invalid.append(raw_mod)
+                continue
+
+            addon_result = _validated_modifier_or_addon_result(
+                classification_result,
+                cleaned,
+                flattened_options,
+            )
+            print(
+                "[validateRequestedItem] addon_result "
+                f"raw={raw_mod!r} isAddon={addon_result.get('isAddon')!r} "
+                f"suggestedNote={addon_result.get('suggestedNote')!r}"
+            )
+
+            if addon_result.get("isAddon") and addon_result.get("suggestedNote") is not None:
+                as_note.append(addon_result["suggestedNote"])
+            else:
+                truly_invalid.append(raw_mod)
+
+        all_valid = not truly_invalid and not require_choice
+        result = {
+            **base,
+            "itemId": item_id,
+            "merchantId": merchant_id,
+            "available": True,
+            "valid": valid,
+            "invalid": truly_invalid,
+            "asNote": as_note,
+            "requireChoice": require_choice,
+            "allValid": all_valid,
+            "isModifierOrAddon": None,
+            "classification": None,
+            "closestModifier": None,
+        }
+        print(f"[validateRequestedItem] result={result!r}")
+        return result
+
+    except Exception as exc:
+        print(
+            "[validateRequestedItem] error "
+            f"itemName={itemName!r} details={details!r} error={exc!r}"
+        )
+        return {
+            "exactMatch": None,
+            "candidates": [],
+            "matchConfidence": "none",
+            **_null_downstream,
+        }
+
+
+async def addItemsToOrder(session_id: str, items: list[dict] | None = None, creds: dict | None = None) -> dict:
     """Add one or more menu items (with optional modifiers) to the customer's active Clover order.
 
     Call this when the customer confirms they want to add items to their order. Do NOT pass
@@ -1022,8 +1416,8 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None) -> d
         - ``failedItems[].reason`` contains "modifier before" → modifiers must follow an item spec.
     """
     print(f"[addItemsToOrder] session_id={session_id!r} items={items}")
-    db = _firebase.firebaseDatabase
-    creds = await prepare_clover_data(db, settings)
+    if creds is None:
+        raise ValueError("creds must be provided")
     print(
         f"[addItemsToOrder] merchant_id={creds.get('merchant_id')!r} base_url={creds.get('base_url')!r}"
     )
@@ -1211,6 +1605,7 @@ async def replaceItemInOrder(
     lineItemId: str | None = None,
     orderPosition: int | None = None,
     itemName: str | None = None,
+    creds: dict | None = None,
 ) -> dict:
     """Swap an already-ordered line item for a different menu item.
 
@@ -1279,8 +1674,8 @@ async def replaceItemInOrder(
     print(
         f"[replaceItemInOrder] session_id={session_id!r} lineItemId={lineItemId!r} orderPosition={orderPosition!r} itemName={itemName!r} replacement={replacement}"
     )
-    db = _firebase.firebaseDatabase
-    creds = await prepare_clover_data(db, settings)
+    if creds is None:
+        raise ValueError("creds must be provided")
 
     order_id = await get_order_id_for_session(session_id, creds)
     print(f"[replaceItemInOrder] order_id={order_id!r}")
@@ -1532,7 +1927,7 @@ async def replaceItemInOrder(
     return result
 
 
-async def removeItemFromOrder(session_id: str, target: dict) -> dict:
+async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None = None) -> dict:
     """Fully remove a line item from the customer's current order.
 
     Use this when the customer wants to delete an item entirely (not reduce quantity).
@@ -1593,8 +1988,8 @@ async def removeItemFromOrder(session_id: str, target: dict) -> dict:
             "error": "must provide at least one of: orderPosition or itemName",
         }
 
-    db = _firebase.firebaseDatabase
-    creds = await prepare_clover_data(db, settings)
+    if creds is None:
+        raise ValueError("creds must be provided")
 
     order_id = await get_order_id_for_session(session_id, creds)
     print(f"[removeItemFromOrder] order_id={order_id!r}")
@@ -1717,7 +2112,7 @@ async def removeItemFromOrder(session_id: str, target: dict) -> dict:
     return result
 
 
-async def changeItemQuantity(session_id: str, target: dict, newQuantity: int) -> dict:
+async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, creds: dict | None = None) -> dict:
     """Change the quantity of an existing line item in the customer's order.
 
     Use this when the customer wants more or fewer of the same item and the agent
@@ -1768,8 +2163,8 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int) ->
             "error": "must provide one of: lineitemId, lineItemId, orderPosition, or itemName",
         }
 
-    db = _firebase.firebaseDatabase
-    creds = await prepare_clover_data(db, settings)
+    if creds is None:
+        raise ValueError("creds must be provided")
 
     order_id = await get_order_id_for_session(session_id, creds)
     print(f"[changeItemQuantity] order_id={order_id!r}")
@@ -1936,7 +2331,7 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int) ->
     return result
 
 
-async def updateItemInOrder(session_id: str, target: dict, updates: dict) -> dict:
+async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds: dict | None = None) -> dict:
     """Update modifiers and/or the note for one existing order line item.
 
     Use this when the execution agent already knows which current order item to
@@ -2021,8 +2416,8 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict) -> dic
             "error": f"modifier ids cannot appear in both addModifiers and removeModifiers: {modifier_conflicts}",
         }
 
-    db = _firebase.firebaseDatabase
-    creds = await prepare_clover_data(db, settings)
+    if creds is None:
+        raise ValueError("creds must be provided")
 
     order_id = await get_order_id_for_session(session_id, creds)
     print(f"[updateItemInOrder] order_id={order_id!r}")
@@ -2250,7 +2645,7 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict) -> dic
     return result
 
 
-async def calcOrderPrice(session_id: str) -> dict:
+async def calcOrderPrice(session_id: str, creds: dict | None = None) -> dict:
     """Return the current Clover-backed price breakdown for the session order.
 
     Use this before confirming an order or when the execution agent needs an
@@ -2300,8 +2695,8 @@ async def calcOrderPrice(session_id: str) -> dict:
         return result
 
     try:
-        db = _firebase.firebaseDatabase
-        creds = await prepare_clover_data(db, settings)
+        if creds is None:
+            raise ValueError("creds must be provided")
         print(f"[calcOrderPrice] order_id={order_id!r}")
 
         try:
@@ -2353,7 +2748,7 @@ async def calcOrderPrice(session_id: str) -> dict:
         }
 
 
-async def confirmOrder(session_id: str) -> dict:
+async def confirmOrder(session_id: str, creds: dict | None = None) -> dict:
     """Submit the current Clover order and mark the chat session as confirmed."""
     print(f"[confirmOrder] session_id={session_id!r}")
 
@@ -2371,8 +2766,8 @@ async def confirmOrder(session_id: str) -> dict:
         return result
 
     try:
-        db = _firebase.firebaseDatabase
-        creds = await prepare_clover_data(db, settings)
+        if creds is None:
+            raise ValueError("creds must be provided")
         print(f"[confirmOrder] order_id={order_id!r}")
 
         current_order = await fetch_clover_order(
@@ -2444,7 +2839,7 @@ async def confirmOrder(session_id: str) -> dict:
         }
 
 
-async def cancelOrder(session_id: str) -> dict:
+async def cancelOrder(session_id: str, creds: dict | None = None) -> dict:
     """Cancel an unconfirmed Clover order and clear session order state."""
     print(f"[cancelOrder] session_id={session_id!r}")
 
@@ -2473,8 +2868,8 @@ async def cancelOrder(session_id: str) -> dict:
         return result
 
     try:
-        db = _firebase.firebaseDatabase
-        creds = await prepare_clover_data(db, settings)
+        if creds is None:
+            raise ValueError("creds must be provided")
 
         had_items = False
         try:
@@ -2523,7 +2918,7 @@ async def cancelOrder(session_id: str) -> dict:
         }
 
 
-async def getOrderLineItems(session_id: str) -> dict:
+async def getOrderLineItems(session_id: str, creds: dict | None = None) -> dict:
     """Return all line items currently in the customer's cart without modifying the order.
 
     Use this tool when you need to inspect what is in the order before acting on it —
@@ -2557,8 +2952,8 @@ async def getOrderLineItems(session_id: str) -> dict:
     """
     print(f"[getOrderLineItems] session_id={session_id!r}")
     try:
-        db = _firebase.firebaseDatabase
-        creds = await prepare_clover_data(db, settings)
+        if creds is None:
+            raise ValueError("creds must be provided")
         order_id = await get_order_id_for_session(session_id, creds)
         print(f"[getOrderLineItems] order_id={order_id!r}")
 
@@ -2774,15 +3169,15 @@ CliHandler = Callable[[argparse.Namespace], Awaitable[dict]]
 
 
 async def _cli_find_closest(ns: argparse.Namespace) -> dict:
-    return await findClosestMenuItems(ns.query, ns.details, settings.MERCHANT_ID)
+    return await findClosestMenuItems(ns.query, ns.details, settings.RESTAURANT_ID)
 
 
 async def _cli_get_item_details(ns: argparse.Namespace) -> dict:
-    return await get_item_details(ns.item_id, settings.MERCHANT_ID)
+    return await get_item_details(ns.item_id, settings.RESTAURANT_ID)
 
 
 async def _cli_check_availability(ns: argparse.Namespace) -> dict:
-    return await check_item_availability(ns.item_id, settings.MERCHANT_ID)
+    return await check_item_availability(ns.item_id, settings.RESTAURANT_ID)
 
 
 async def _cli_validate_modifications(ns: argparse.Namespace) -> dict:
@@ -3196,10 +3591,10 @@ def _build_cli_parser(handlers: dict[str, CliHandler]) -> argparse.ArgumentParse
     p.add_argument("item_id", help="Clover item UUID.")
     p.add_argument(
         "--merchant-id",
-        default=settings.MERCHANT_ID,
+        default=settings.RESTAURANT_ID,
         dest="merchant_id",
         metavar="ID",
-        help="Expected Clover merchant id. Defaults to MERCHANT_ID from the environment.",
+        help="Expected Clover merchant id. Defaults to RESTAURANT_ID from the environment.",
     )
     requested_src = p.add_mutually_exclusive_group(required=True)
     requested_src.add_argument(
@@ -3228,10 +3623,10 @@ def _build_cli_parser(handlers: dict[str, CliHandler]) -> argparse.ArgumentParse
     )
     p.add_argument(
         "--merchant-id",
-        default=settings.MERCHANT_ID,
+        default=settings.RESTAURANT_ID,
         dest="merchant_id",
         metavar="ID",
-        help="Expected Clover merchant id. Defaults to MERCHANT_ID from the environment.",
+        help="Expected Clover merchant id. Defaults to RESTAURANT_ID from the environment.",
     )
 
     p = subs.add_parser(

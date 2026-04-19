@@ -50,4 +50,5 @@ _MENU_CACHE_VERSION = (
 
 # How long we keep the Clover order id in Redis for a chat session (seconds).
 _SESSION_CLOVER_ORDER_REDIS_TTL_SECONDS = 3 * 60 * 60
+_SESSION_CLARIFICATION_AND_INTENT_TTL_SECONDS = 3 * 60 * 60  # 3 hours
 _SUMMARIZE_HISTORY_MAX_OUTPUT_TOKENS = 180

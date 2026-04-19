@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
 from src import firebase as _firebase
 from src.chatbot import gemini_client
@@ -36,11 +37,7 @@ from src.chatbot.tools import (
     calcOrderPrice,
     cancelOrder,
     changeItemQuantity,
-    checkIfModifierOrAddOn,
-    check_item_availability,
     confirmOrder,
-    findClosestMenuItems,
-    get_item_details,
     getMenuLink,
     getItemsNotAvailableToday,
     getOrderLineItems,
@@ -51,84 +48,91 @@ from src.chatbot.tools import (
     replaceItemInOrder,
     removeItemFromOrder,
     requestPickupTime,
-    summarizeConversationHistory,
     updateItemInOrder,
-    validateModifications,
+    validateRequestedItem,
 )
 from datetime import datetime, timezone
 
 from src.cache import cache_list_append
-from src.chatbot.utils import _session_messages_redis_key
+from src.chatbot.utils import (
+    _session_messages_redis_key,
+    getClarificationAndIntent,
+    saveClarificationAndIntent,
+)
 from src.config import settings
+
+_GEMINI_503_MAX_ATTEMPTS = 10
+_GEMINI_503_BACKOFF_SEC = 2.0
+
+_T = TypeVar("_T")
+
+
+def _is_gemini_http_503(exc: AIServiceError) -> bool:
+    """True when ``exc`` wraps a Gemini/API HTTP 503 (service unavailable)."""
+    err: BaseException | None = exc
+    seen: set[int] = set()
+    while err is not None and id(err) not in seen:
+        seen.add(id(err))
+        status = getattr(err, "code", None)
+        if status is None:
+            status = getattr(err, "status_code", None)
+        if status == 503:
+            return True
+        response = getattr(err, "response", None)
+        if response is not None:
+            resp_status = getattr(response, "status_code", None)
+            if resp_status == 503:
+                return True
+        err = err.__cause__
+    return False
+
+
+async def _gemini_service_call_with_503_retries(
+    *,
+    log_label: str,
+    extra_fields: str,
+    call: Callable[[], Awaitable[_T]],
+) -> _T:
+    for attempt in range(1, _GEMINI_503_MAX_ATTEMPTS + 1):
+        try:
+            return await call()
+        except AIServiceError as exc:
+            is_503 = _is_gemini_http_503(exc)
+            will_retry = is_503 and attempt < _GEMINI_503_MAX_ATTEMPTS
+            print(
+                f"{log_label} Gemini call failed",
+                f"trial={attempt}/{_GEMINI_503_MAX_ATTEMPTS}",
+                f"http_503={is_503}",
+                f"will_retry={will_retry}",
+                extra_fields,
+                f"error={exc!r}",
+            )
+            if will_retry:
+                print(
+                    f"{log_label} backing off before retry",
+                    f"sleep_s={_GEMINI_503_BACKOFF_SEC}",
+                    f"next_trial={attempt + 1}",
+                )
+                await asyncio.sleep(_GEMINI_503_BACKOFF_SEC)
+                continue
+            raise
+
 
 _EXECUTION_AGENT_SYSTEM_PROMPT = DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT
 
-_FIND_CLOSEST_MENU_ITEMS_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
+_VALIDATE_REQUESTED_ITEM_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "item_name": {
+        "itemName": {
             "type": "string",
-            "description": "The item name exactly as the customer said it.",
+            "description": "The item name exactly as the customer said it. Do not normalize spelling.",
         },
         "details": {
             "type": ["string", "null"],
-            "description": "Optional modifiers or qualifiers that may help disambiguate the menu item.",
+            "description": "Raw modifier or qualifier string from the customer (e.g. 'lemon pepper, extra crispy'). Pass None when absent. Do not pre-split.",
         },
     },
-    "required": ["item_name"],
-    "additionalProperties": False,
-}
-_CHECK_ITEM_AVAILABILITY_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "item_id": {
-            "type": "string",
-            "description": "The Clover item id returned from menu matching.",
-        }
-    },
-    "required": ["item_id"],
-    "additionalProperties": False,
-}
-_GET_ITEM_DETAILS_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "itemId": {
-            "type": "string",
-            "description": "The Clover item id to inspect.",
-        }
-    },
-    "required": ["itemId"],
-    "additionalProperties": False,
-}
-_VALIDATE_MODIFICATIONS_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "itemId": {
-            "type": "string",
-            "description": "The Clover item id for the current menu item.",
-        },
-        "requestedModifications": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Raw modifier phrases exactly as the customer said them.",
-        },
-    },
-    "required": ["itemId", "requestedModifications"],
-    "additionalProperties": False,
-}
-_CHECK_MODIFIER_OR_ADDON_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "itemId": {
-            "type": "string",
-            "description": "The Clover item id for the current menu item.",
-        },
-        "requestedModification": {
-            "type": "string",
-            "description": "One free-text modification request from the customer.",
-        },
-    },
-    "required": ["itemId", "requestedModification"],
+    "required": ["itemName"],
     "additionalProperties": False,
 }
 _ADD_ITEMS_TO_ORDER_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
@@ -315,9 +319,18 @@ class Orchestrator:
         self,
         request: ChatbotV2MessageRequest,
     ) -> ChatbotV2MessageResponse:
-        context = await self._build_parsing_context(request)
-        parsed_input = await self.parsing_agent.run(context=context)
+        now = datetime.now(timezone.utc).isoformat()
+        redis_key = _session_messages_redis_key(request.session_id)
+        await cache_list_append(
+            redis_key,
+            json.dumps(
+                {"role": "user", "content": request.user_message, "timestamp": now}
+            ),
+        )
+
         execution_context = await self._build_execution_context(request)
+        context = await self._build_parsing_context(request, clover_creds=execution_context.clover_creds)
+        parsed_input = await self.parsing_agent.run(context=context)
         prepared_context = self.prepare_agent_context(
             parsed_input=parsed_input,
             execution_context=execution_context,
@@ -327,15 +340,16 @@ class Orchestrator:
             context_object=prepared_context,
         )
 
-        now = datetime.now(timezone.utc).isoformat()
-        redis_key = _session_messages_redis_key(request.session_id)
+        ai_now = datetime.now(timezone.utc).isoformat()
         await cache_list_append(
             redis_key,
-            json.dumps({"role": "user", "content": request.user_message, "timestamp": now}),
-        )
-        await cache_list_append(
-            redis_key,
-            json.dumps({"role": "assistant", "content": execution_result.agent_reply, "timestamp": now}),
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "content": execution_result.agent_reply,
+                    "timestamp": ai_now,
+                }
+            ),
         )
 
         return ChatbotV2MessageResponse(
@@ -346,27 +360,25 @@ class Orchestrator:
     async def _build_parsing_context(
         self,
         request: ChatbotV2MessageRequest,
+        clover_creds: dict | None = None,
     ) -> ParsingAgentContext:
         current_order_details = await self._load_current_order_details(
-            request.session_id
+            request.session_id, creds=clover_creds
         )
         latest_k_messages_by_customer = await self._load_latest_k_customer_messages(
             request.session_id
         )
-        summary_of_messages_before_k_by_customer = (
-            await self._load_summary_of_messages_before_k(request.session_id)
-        )
+
         return ParsingAgentContext(
             session_id=request.session_id,
             merchant_id=request.merchant_id,
             current_order_details=current_order_details,
             most_recent_message=request.user_message,
             latest_k_messages_by_customer=latest_k_messages_by_customer,
-            summary_of_messages_before_k_by_customer=summary_of_messages_before_k_by_customer,
         )
 
-    async def _load_current_order_details(self, session_id: str) -> CurrentOrderDetails:
-        order_result = await getOrderLineItems(session_id)
+    async def _load_current_order_details(self, session_id: str, creds: dict | None = None) -> CurrentOrderDetails:
+        order_result = await getOrderLineItems(session_id, creds=creds)
         if not order_result.get("success"):
             return CurrentOrderDetails(
                 order_id="",
@@ -406,22 +418,13 @@ class Orchestrator:
             and str(message.get("content", "")).strip()
         ]
 
-    async def _load_summary_of_messages_before_k(self, session_id: str) -> str:
-        summary_result = await summarizeConversationHistory(
-            session_id,
-            settings.DEFAULT_PREVIOUS_MESSAGES_K,
-        )
-        if not summary_result.get("success"):
-            return ""
-        return str(summary_result.get("summary", ""))
-
     async def _build_execution_context(
         self,
         request: ChatbotV2MessageRequest,
     ) -> ExecutionAgentContext:
         try:
             clover_creds = await prepare_clover_data(
-                _firebase.firebaseDatabase, settings
+                _firebase.firebaseDatabase, settings, request.merchant_id
             )
         except Exception as exc:
             return ExecutionAgentContext(
@@ -431,9 +434,7 @@ class Orchestrator:
                 clover_error=str(exc),
             )
 
-        resolved_merchant_id = str(
-            clover_creds.get("merchant_id") or request.merchant_id
-        )
+        resolved_merchant_id = clover_creds.get("merchant_id") or request.merchant_id
         return ExecutionAgentContext(
             session_id=request.session_id,
             merchant_id=resolved_merchant_id,
@@ -464,7 +465,6 @@ class Orchestrator:
             latest_customer_message=parsed_input.context.most_recent_message,
             current_order_details=parsed_input.context.current_order_details,
             latest_k_messages_by_customer=parsed_input.context.latest_k_messages_by_customer,
-            summary_of_messages_before_k_by_customer=parsed_input.context.summary_of_messages_before_k_by_customer,
             clover_creds=execution_context.clover_creds,
             clover_error=execution_context.clover_error,
         )
@@ -479,6 +479,11 @@ class ParsingAgent:
     ) -> None:
         self.model = model or settings.PARSING_AGENT_GEMINI_MODEL
         self.prompts = prompts or DEFAULT_PARSING_AGENT_PROMPTS
+        print(
+            "[ParsingAgent] init",
+            f"model={self.model}",
+            f"prompts={'custom' if prompts is not None else 'default'}",
+        )
 
     async def run(
         self,
@@ -487,30 +492,78 @@ class ParsingAgent:
         prompts: ParsingAgentPrompts | None = None,
     ) -> ParsingAgentResult:
         active_prompts = prompts or self.prompts
+        msg_preview = context.most_recent_message.replace("\n", " ")[:120]
+        print(
+            "[ParsingAgent] run start",
+            f"session_id={context.session_id}",
+            f"merchant_id={context.merchant_id}",
+            f"most_recent_message_preview={msg_preview!r}",
+            f"run_prompts_override={'yes' if prompts is not None else 'no'}",
+        )
 
         try:
-            parsed_requests = await self._generate_parse(
+            parsed_requests = await self._generate_parse_with_gemini_503_retries(
                 context=context,
                 prompts=active_prompts,
                 strict_retry=False,
             )
+            print(f"[ParsingAgent] parsed_requests={parsed_requests!r}")
         except AIServiceError as exc:
-            if not self._should_retry_on_parse_error(exc):
+            will_retry = self._should_retry_on_parse_error(exc)
+            print(
+                "[ParsingAgent] first parse failed",
+                f"error={exc!r}",
+                f"will_retry_strict={will_retry}",
+            )
+            if not will_retry:
                 raise
             try:
-                parsed_requests = await self._generate_parse(
+                parsed_requests = await self._generate_parse_with_gemini_503_retries(
                     context=context,
                     prompts=active_prompts,
                     strict_retry=True,
                 )
             except AIServiceError as retry_exc:
+                print(
+                    "[ParsingAgent] strict retry failed",
+                    f"error={retry_exc!r}",
+                )
                 raise AIServiceError(
                     f"Parsing agent failed after retry: {retry_exc}"
                 ) from retry_exc
+            print("[ParsingAgent] strict retry succeeded")
+
+        n_items = len(parsed_requests.data)
+        intents = [item.intent.value for item in parsed_requests.data]
+        print(
+            "[ParsingAgent] run done",
+            f"parsed_item_count={n_items}",
+            f"intents={intents}",
+        )
 
         return ParsingAgentResult(
             context=context,
             parsed_requests=parsed_requests,
+        )
+
+    async def _generate_parse_with_gemini_503_retries(
+        self,
+        *,
+        context: ParsingAgentContext,
+        prompts: ParsingAgentPrompts,
+        strict_retry: bool,
+    ) -> ParsedRequestsPayload:
+        async def _call() -> ParsedRequestsPayload:
+            return await self._generate_parse(
+                context=context,
+                prompts=prompts,
+                strict_retry=strict_retry,
+            )
+
+        return await _gemini_service_call_with_503_retries(
+            log_label="[ParsingAgent]",
+            extra_fields=f"strict_retry={strict_retry}",
+            call=_call,
         )
 
     async def _generate_parse(
@@ -520,17 +573,28 @@ class ParsingAgent:
         prompts: ParsingAgentPrompts,
         strict_retry: bool,
     ) -> ParsedRequestsPayload:
+        print(
+            "[ParsingAgent] _generate_parse",
+            f"strict_retry={strict_retry}",
+            f"model={self.model}",
+        )
         messages = self._build_messages(
             context=context,
             prompts=prompts,
             strict_retry=strict_retry,
         )
-        return await gemini_client.generate_model(
+        result = await gemini_client.generate_model(
             messages,
             ParsedRequestsPayload,
             temperature=0,
             model=self.model,
         )
+        print(
+            "[ParsingAgent] _generate_parse ok",
+            f"strict_retry={strict_retry}",
+            f"item_count={len(result.data)}",
+        )
+        return result
 
     def _build_messages(
         self,
@@ -554,9 +618,16 @@ class ParsingAgent:
         system_prompt = "\n\n".join(
             section for section in system_sections if section.strip()
         )
+        user_content = self._render_context(context)
+        print(
+            "[ParsingAgent] _build_messages",
+            f"strict_retry={strict_retry}",
+            f"system_chars={len(system_prompt)}",
+            f"user_chars={len(user_content)}",
+        )
         return [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": self._render_context(context)},
+            {"role": "user", "content": user_content},
         ]
 
     def _render_context(self, context: ParsingAgentContext) -> str:
@@ -567,12 +638,23 @@ class ParsingAgent:
             ),
             most_recent_message_by_customer=context.most_recent_message,
             latest_k_messages_by_customer=context.latest_k_messages_by_customer,
-            summary_of_messages_before_k_by_customer=context.summary_of_messages_before_k_by_customer,
         )
-        return json.dumps(prompt_context.model_dump(mode="json"), indent=2)
+        rendered = json.dumps(prompt_context.model_dump(mode="json"), indent=2)
+        print(
+            "[ParsingAgent] _render_context",
+            f"k_tail_messages={len(context.latest_k_messages_by_customer)}",
+            f"json_chars={len(rendered)}",
+        )
+        return rendered
 
     def _should_retry_on_parse_error(self, error: AIServiceError) -> bool:
-        return str(error).startswith(_PARSE_VALIDATION_ERROR_PREFIX)
+        retry = str(error).startswith(_PARSE_VALIDATION_ERROR_PREFIX)
+        print(
+            "[ParsingAgent] _should_retry_on_parse_error",
+            f"retry={retry}",
+            f"error_prefix={str(error)[:80]!r}",
+        )
+        return retry
 
 
 class ExecutionAgent:
@@ -591,6 +673,13 @@ class ExecutionAgent:
         )
         self.system_prompt = (
             _EXECUTION_AGENT_SYSTEM_PROMPT if system_prompt is None else system_prompt
+        )
+        print(
+            "[ExecutionAgent] init",
+            f"model={self.model}",
+            f"max_tool_calls={self.max_tool_calls}",
+            f"system_prompt={'custom' if system_prompt is not None else 'default'}",
+            f"system_prompt_chars={len(self.system_prompt)}",
         )
 
     async def run(
@@ -617,17 +706,81 @@ class ExecutionAgent:
             and item.request_details.strip()
         ]
 
+        parsed_summary = [
+            f"{item.intent.value}/{item.confidence_level.value}:"
+            f"{item.request_items.name!r}x{item.request_items.quantity}"
+            for item in parsed_requests.data
+        ]
+        print(
+            "[ExecutionAgent] run start",
+            f"session_id={context_object.session_id!r}",
+            f"merchant_id={context_object.merchant_id!r}",
+            f"has_clover_creds={context_object.clover_creds is not None}",
+            f"clover_error={context_object.clover_error!r}",
+            f"parsed_request_count={len(parsed_requests.data)}",
+            f"parsed_summary={parsed_summary}",
+            f"pending_clarification_count={len(pending_clarifications)}",
+            f"pending_clarifications={pending_clarifications!r}",
+        )
+        print(
+            "[ExecutionAgent] run tools",
+            f"tool_count={len(active_tools)}",
+            f"tool_names={[t.name for t in active_tools]}",
+            f"max_tool_calls_for_llm={self.max_tool_calls}",
+        )
+
+        raw_clarification_and_intent = await getClarificationAndIntent(
+            context_object.session_id
+        )
+        clarification_and_intent = (
+            raw_clarification_and_intent
+            if raw_clarification_and_intent["success"]
+            else None
+        )
+        print(
+            "[ExecutionAgent] run clarification_and_intent",
+            f"success={raw_clarification_and_intent['success']}",
+            f"found={clarification_and_intent is not None}",
+        )
+
         messages = self._build_messages(
             parsed_requests=parsed_requests,
             context_object=context_object,
             tools=active_tools,
+            clarification_and_intent=clarification_and_intent,
         )
-        agent_reply = await gemini_client.generate_text_with_tools(
-            messages,
-            function_tools=active_tools,
-            temperature=0,
-            max_tool_calls=self.max_tool_calls,
-            model=self.model,
+        print(
+            "[ExecutionAgent] run calling generate_text_with_tools",
+            f"message_count={len(messages)}",
+            f"model={self.model}",
+        )
+
+        async def _call_llm() -> str:
+            return await gemini_client.generate_text_with_tools(
+                messages,
+                function_tools=active_tools,
+                temperature=0,
+                max_tool_calls=self.max_tool_calls,
+                model=self.model,
+            )
+
+        agent_reply = await _gemini_service_call_with_503_retries(
+            log_label="[ExecutionAgent]",
+            extra_fields=f"model={self.model!r}",
+            call=_call_llm,
+        )
+        await saveClarificationAndIntent(
+            context_object.session_id,
+            "" if not pending_clarifications else pending_clarifications,
+            parsed_requests.model_dump(mode="json", by_alias=True)["Data"],
+        )
+        reply_one_line = agent_reply.replace("\n", " ")[:400]
+        print(
+            "[ExecutionAgent] run done",
+            f"agent_reply_chars={len(agent_reply)}",
+            f"agent_reply_preview={reply_one_line!r}",
+            f"actions_executed={tracker.actions_executed!r}",
+            f"order_updated={tracker.order_updated}",
         )
 
         return ExecutionAgentResult(
@@ -644,6 +797,7 @@ class ExecutionAgent:
         parsed_requests: ParsedRequestsPayload,
         context_object: PreparedExecutionContext,
         tools: Sequence[gemini_client.GeminiFunctionTool],
+        clarification_and_intent: dict | None = None,
     ) -> list[LLMMessage]:
         prompt_context = ExecutionAgentPromptContext(
             context_object=context_object.model_dump(mode="json"),
@@ -657,15 +811,26 @@ class ExecutionAgent:
                 ).model_dump(mode="json")
                 for tool in tools
             ],
+            previous_clarification_and_intent=clarification_and_intent,
         )
+        user_content = json.dumps(prompt_context.model_dump(mode="json"), indent=2)
         messages: list[LLMMessage] = [
             {
                 "role": "user",
-                "content": json.dumps(prompt_context.model_dump(mode="json"), indent=2),
+                "content": user_content,
             }
         ]
         if self.system_prompt.strip():
             messages.insert(0, {"role": "system", "content": self.system_prompt})
+        system_chars = sum(len(m["content"]) for m in messages if m["role"] == "system")
+        user_chars = sum(len(m["content"]) for m in messages if m["role"] == "user")
+        print(
+            "[ExecutionAgent] _build_messages",
+            f"roles={[m['role'] for m in messages]}",
+            f"system_chars={system_chars}",
+            f"user_json_chars={user_chars}",
+            f"tool_descriptors_embedded={len(tools)}",
+        )
         return messages
 
     def build_tools(
@@ -675,6 +840,11 @@ class ExecutionAgent:
         runtime = runtime or ExecutionToolRuntime(
             context=ExecutionAgentContext(session_id="", merchant_id="")
         )
+        print(
+            "[ExecutionAgent] build_tools",
+            f"session_id={runtime.context.session_id!r}",
+            f"merchant_id={runtime.context.merchant_id!r}",
+        )
         return self._build_tools(runtime)
 
     def _build_tools(
@@ -682,70 +852,77 @@ class ExecutionAgent:
         runtime: ExecutionToolRuntime,
         tracker: ExecutionTracker | None = None,
     ) -> list[gemini_client.GeminiFunctionTool]:
-        async def _find_closest_menu_items_tool(
+        print(
+            "[ExecutionAgent] _build_tools",
+            f"session_id={runtime.context.session_id!r}",
+            f"merchant_id={runtime.context.merchant_id!r}",
+            f"tracker_attached={'yes' if tracker is not None else 'no'}",
+            f"has_clover_creds={runtime.context.clover_creds is not None}",
+        )
+
+        def _log_tool_call_io(
+            tool_name: str, arguments: dict[str, Any], result: dict[str, Any]
+        ) -> None:
+            """Log the model-facing tool arguments and the tool result dict as JSON."""
+            try:
+                in_json = json.dumps(
+                    arguments, indent=2, ensure_ascii=False, default=str
+                )
+            except TypeError:
+                in_json = repr(arguments)
+            try:
+                out_json = json.dumps(result, indent=2, ensure_ascii=False, default=str)
+            except TypeError:
+                out_json = repr(result)
+            print(f"[ExecutionAgent] tool={tool_name} INPUT:\n{in_json}")
+            print(f"[ExecutionAgent] tool={tool_name} OUTPUT:\n{out_json}")
+
+        async def _validate_requested_item_tool(
             *,
-            item_name: str,
+            itemName: str,
             details: str | None = None,
         ) -> dict[str, Any]:
+            args: dict[str, Any] = {"itemName": itemName, "details": details}
             if runtime.context.clover_creds is None:
-                return {
-                    "success": False,
-                    "error": runtime.context.clover_error
-                    or "Clover credentials unavailable.",
-                    "exact_match": None,
+                err = runtime.context.clover_error or "Clover credentials unavailable."
+                out: dict[str, Any] = {
+                    "exactMatch": None,
                     "candidates": [],
-                    "match_confidence": "none",
+                    "matchConfidence": "none",
+                    "itemId": None,
+                    "merchantId": None,
+                    "available": None,
+                    "valid": None,
+                    "invalid": None,
+                    "asNote": None,
+                    "requireChoice": None,
+                    "allValid": None,
+                    "isModifierOrAddon": None,
+                    "classification": None,
+                    "closestModifier": None,
+                    "error": err,
                 }
-
-            return await findClosestMenuItems(
-                item_name=item_name,
+                _log_tool_call_io("validateRequestedItem", args, out)
+                return out
+            out = await validateRequestedItem(
+                itemName=itemName,
                 details=details,
                 merchant_id=runtime.context.merchant_id,
                 creds=runtime.context.clover_creds,
             )
-
-        async def _check_item_availability_tool(*, item_id: str) -> dict[str, Any]:
-            return await check_item_availability(
-                item_id=item_id,
-                merchant_id=runtime.context.merchant_id,
-            )
-
-        async def _get_item_details_tool(*, itemId: str) -> dict[str, Any]:
-            return await get_item_details(
-                item_id=itemId,
-                merchant_id=runtime.context.merchant_id,
-            )
-
-        async def _validate_modifications_tool(
-            *,
-            itemId: str,
-            requestedModifications: list[str],
-        ) -> dict[str, Any]:
-            return await validateModifications(
-                itemId=itemId,
-                merchantId=runtime.context.merchant_id,
-                requestedModifications=requestedModifications,
-            )
-
-        async def _check_modifier_or_addon_tool(
-            *,
-            itemId: str,
-            requestedModification: str,
-        ) -> dict[str, Any]:
-            return await checkIfModifierOrAddOn(
-                itemId=itemId,
-                merchantId=runtime.context.merchant_id,
-                requestedModification=requestedModification,
-            )
+            _log_tool_call_io("validateRequestedItem", args, out)
+            return out
 
         async def _add_items_to_order_tool(*, items: list[dict]) -> dict[str, Any]:
-            result = await addItemsToOrder(runtime.context.session_id, items)
+            args = {"items": items}
+            result = await addItemsToOrder(runtime.context.session_id, items, creds=runtime.context.clover_creds)
             if result.get("success") and tracker is not None:
                 for added in result.get("addedItems", []):
                     name = str(added.get("name", ""))
                     qty = int(added.get("quantity", 1) or 1)
                     tracker.actions_executed.append(f"added {qty}x {name}")
                 tracker.order_updated = True
+            _log_tool_call_io("addItemsToOrder", args, result)
             return result
 
         async def _replace_item_in_order_tool(
@@ -755,26 +932,36 @@ class ExecutionAgent:
             orderPosition: int | None = None,
             itemName: str | None = None,
         ) -> dict[str, Any]:
+            args = {
+                "replacement": replacement,
+                "lineItemId": lineItemId,
+                "orderPosition": orderPosition,
+                "itemName": itemName,
+            }
             result = await replaceItemInOrder(
                 runtime.context.session_id,
                 replacement,
                 lineItemId=lineItemId,
                 orderPosition=orderPosition,
                 itemName=itemName,
+                creds=runtime.context.clover_creds,
             )
             if result.get("success") and tracker is not None:
                 removed = str((result.get("removedItem") or {}).get("name", ""))
                 added = str((result.get("addedItem") or {}).get("name", ""))
                 tracker.actions_executed.append(f"replaced {removed} with {added}")
                 tracker.order_updated = True
+            _log_tool_call_io("replaceItemInOrder", args, result)
             return result
 
         async def _remove_item_from_order_tool(*, target: dict) -> dict[str, Any]:
-            result = await removeItemFromOrder(runtime.context.session_id, target)
+            args = {"target": target}
+            result = await removeItemFromOrder(runtime.context.session_id, target, creds=runtime.context.clover_creds)
             if result.get("success") and tracker is not None:
                 name = str((result.get("removedItem") or {}).get("name", ""))
                 tracker.actions_executed.append(f"removed {name}")
                 tracker.order_updated = True
+            _log_tool_call_io("removeItemFromOrder", args, result)
             return result
 
         async def _change_item_quantity_tool(
@@ -782,16 +969,19 @@ class ExecutionAgent:
             target: dict,
             newQuantity: int,
         ) -> dict[str, Any]:
+            args = {"target": target, "newQuantity": newQuantity}
             result = await changeItemQuantity(
                 runtime.context.session_id,
                 target,
                 newQuantity,
+                creds=runtime.context.clover_creds,
             )
             if result.get("success") and tracker is not None:
                 name = str(result.get("itemName", ""))
                 qty = int(result.get("newQuantity", newQuantity) or newQuantity)
                 tracker.actions_executed.append(f"changed {name} to {qty}")
                 tracker.order_updated = True
+            _log_tool_call_io("changeItemQuantity", args, result)
             return result
 
         async def _update_item_in_order_tool(
@@ -799,100 +989,104 @@ class ExecutionAgent:
             target: dict,
             updates: dict,
         ) -> dict[str, Any]:
-            result = await updateItemInOrder(runtime.context.session_id, target, updates)
+            args = {"target": target, "updates": updates}
+            result = await updateItemInOrder(
+                runtime.context.session_id, target, updates, creds=runtime.context.clover_creds
+            )
             if result.get("success") and tracker is not None:
                 name = str(result.get("itemName", ""))
                 tracker.actions_executed.append(f"updated {name}")
                 tracker.order_updated = True
+            _log_tool_call_io("updateItemInOrder", args, result)
             return result
 
         async def _calc_order_price_tool() -> dict[str, Any]:
-            return await calcOrderPrice(runtime.context.session_id)
+            args: dict[str, Any] = {}
+            out = await calcOrderPrice(runtime.context.session_id, creds=runtime.context.clover_creds)
+            _log_tool_call_io("calcOrderPrice", args, out)
+            return out
 
         async def _confirm_order_tool() -> dict[str, Any]:
-            result = await confirmOrder(runtime.context.session_id)
+            args = {}
+            result = await confirmOrder(runtime.context.session_id, creds=runtime.context.clover_creds)
             if result.get("success") and tracker is not None:
                 tracker.actions_executed.append("confirmed order")
                 tracker.order_updated = True
+            _log_tool_call_io("confirmOrder", args, result)
             return result
 
         async def _cancel_order_tool() -> dict[str, Any]:
-            result = await cancelOrder(runtime.context.session_id)
+            args = {}
+            result = await cancelOrder(runtime.context.session_id, creds=runtime.context.clover_creds)
             if result.get("success") and tracker is not None:
                 tracker.actions_executed.append("cancelled order")
                 tracker.order_updated = True
+            _log_tool_call_io("cancelOrder", args, result)
             return result
 
         async def _get_menu_link_tool() -> dict[str, Any]:
-            return await getMenuLink(
+            args = {}
+            out = await getMenuLink(
                 session_id=runtime.context.session_id,
                 merchant_id=runtime.context.merchant_id,
                 creds=runtime.context.clover_creds,
             )
+            _log_tool_call_io("getMenuLink", args, out)
+            return out
 
         async def _get_items_not_available_today_tool() -> dict[str, Any]:
-            return await getItemsNotAvailableToday(
+            args = {}
+            out = await getItemsNotAvailableToday(
                 merchant_id=runtime.context.merchant_id,
                 creds=runtime.context.clover_creds,
             )
+            _log_tool_call_io("getItemsNotAvailableToday", args, out)
+            return out
 
         async def _human_intervention_needed_tool(*, reason: str) -> dict[str, Any]:
-            return await humanInterventionNeeded(
+            args = {"reason": reason}
+            out = await humanInterventionNeeded(
                 session_id=runtime.context.session_id,
                 reason=reason,
             )
+            _log_tool_call_io("humanInterventionNeeded", args, out)
+            return out
 
         async def _get_previous_orders_details_tool(
             *,
             limit: int | None = None,
         ) -> dict[str, Any]:
-            return await getPreviousOrdersDetails(
+            eff_limit = limit if limit is not None else 3
+            args = {"limit": limit}
+            out = await getPreviousOrdersDetails(
                 session_id=runtime.context.session_id,
-                limit=limit or 3,
+                limit=eff_limit,
             )
+            _log_tool_call_io("getPreviousOrdersDetails", args, out)
+            return out
 
         async def _request_pickup_time_tool(
             *,
             requested_time: str | None = None,
         ) -> dict[str, Any]:
-            return await requestPickupTime(
+            args = {"requested_time": requested_time}
+            out = await requestPickupTime(
                 session_id=runtime.context.session_id,
                 requested_time=requested_time,
             )
+            _log_tool_call_io("requestPickupTime", args, out)
+            return out
 
-        return [
+        tools_list = [
             gemini_client.GeminiFunctionTool(
-                name="findClosestMenuItems",
+                name="validateRequestedItem",
                 description=(
-                    "Resolve a customer-mentioned food item against the live menu "
-                    "and return exact or close menu matches."
+                    "Resolve a customer-mentioned item against the live menu, confirm availability, "
+                    "and validate any requested modifiers — all in one call. Use this for ADD_ITEM, "
+                    "MODIFY_ITEM, and REPLACE_ITEM before mutating the order."
                 ),
-                parameters_json_schema=_FIND_CLOSEST_MENU_ITEMS_PARAMETERS_JSON_SCHEMA,
-                handler=_find_closest_menu_items_tool,
-            ),
-            gemini_client.GeminiFunctionTool(
-                name="checkItemAvailability",
-                description="Check whether a concrete menu item can be ordered right now.",
-                parameters_json_schema=_CHECK_ITEM_AVAILABILITY_PARAMETERS_JSON_SCHEMA,
-                handler=_check_item_availability_tool,
-            ),
-            gemini_client.GeminiFunctionTool(
-                name="getItemDetails",
-                description="Return display details for one concrete menu item.",
-                parameters_json_schema=_GET_ITEM_DETAILS_PARAMETERS_JSON_SCHEMA,
-                handler=_get_item_details_tool,
-            ),
-            gemini_client.GeminiFunctionTool(
-                name="validateModifications",
-                description="Validate free-text modifier requests against one resolved menu item.",
-                parameters_json_schema=_VALIDATE_MODIFICATIONS_PARAMETERS_JSON_SCHEMA,
-                handler=_validate_modifications_tool,
-            ),
-            gemini_client.GeminiFunctionTool(
-                name="checkIfModifierOrAddOn",
-                description="Classify whether a free-text change is an existing modifier or should become a note.",
-                parameters_json_schema=_CHECK_MODIFIER_OR_ADDON_PARAMETERS_JSON_SCHEMA,
-                handler=_check_modifier_or_addon_tool,
+                parameters_json_schema=_VALIDATE_REQUESTED_ITEM_PARAMETERS_JSON_SCHEMA,
+                handler=_validate_requested_item_tool,
             ),
             gemini_client.GeminiFunctionTool(
                 name="addItemsToOrder",
@@ -973,3 +1167,9 @@ class ExecutionAgent:
                 handler=_request_pickup_time_tool,
             ),
         ]
+        print(
+            "[ExecutionAgent] _build_tools built",
+            f"gemini_tool_count={len(tools_list)}",
+            f"names={[t.name for t in tools_list]}",
+        )
+        return tools_list

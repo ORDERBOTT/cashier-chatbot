@@ -67,7 +67,14 @@ async def ensure_fresh_clover_access_token(
     """Refresh OAuth tokens when near expiry, persist to Firestore, return ``access_token`` for menu calls."""
     client_id = creds.get("client_id") or app_client_id
     refresh_token = creds.get("refresh_token")
-    if _should_refresh_access_token(creds) and refresh_token and client_id:
+    should_refresh = _should_refresh_access_token(creds)
+    print(
+        f"[ensure_fresh_clover_access_token] should_refresh={should_refresh} "
+        f"has_refresh_token={bool(refresh_token)} "
+        f"has_client_id={bool(client_id)}"
+    )
+    if should_refresh and refresh_token and client_id:
+        print("[ensure_fresh_clover_access_token] attempting token refresh")
         try:
             new_tokens = await refresh_clover_oauth_tokens(
                 base_url, str(client_id), str(refresh_token)
@@ -87,12 +94,19 @@ async def ensure_fresh_clover_access_token(
             creds.update(updates)
             if doc_ref is not None:
                 await doc_ref.update(updates)
+            print("[ensure_fresh_clover_access_token] token refresh succeeded")
         except httpx.HTTPError as exc:
             print(
                 f"Clover token refresh failed ({exc!r}); continuing with existing access_token"
             )
+    elif should_refresh:
+        print(
+            "[ensure_fresh_clover_access_token] refresh needed but skipped "
+            f"(missing {'refresh_token' if not refresh_token else 'client_id'})"
+        )
 
     token = creds.get("access_token")
+    print(f"[ensure_fresh_clover_access_token] final has_token={bool(token)}")
     if not token:
         raise ValueError("Clover access_token missing after refresh attempt")
     return str(token)

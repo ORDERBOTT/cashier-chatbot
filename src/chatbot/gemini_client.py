@@ -391,6 +391,27 @@ async def _build_tool_response_content(
     return types.Content(role="tool", parts=parts)
 
 
+def _debug_log_gemini_response(label: str, response: object) -> None:
+    """Print SDK response metadata for local debugging (hangs, slow calls)."""
+    cands = getattr(response, "candidates", None) or []
+    n = len(cands) if isinstance(cands, list) else 0
+    finish_reasons: list[str] = []
+    if isinstance(cands, list):
+        for i, cand in enumerate(cands):
+            fr = getattr(cand, "finish_reason", None)
+            finish_reasons.append(f"c{i}={fr!r}")
+    usage = getattr(response, "usage_metadata", None)
+    print(
+        f"[Gemini] {label} response",
+        f"type={type(response).__name__}",
+        f"candidates={n}",
+        f"finish_reasons=[{', '.join(finish_reasons)}]"
+        if finish_reasons
+        else "finish_reasons=[]",
+        f"usage_metadata={usage!r}",
+    )
+
+
 async def generate_text(
     messages: Sequence[LLMMessage],
     *,
@@ -399,9 +420,19 @@ async def generate_text(
     model: str | None = None,
 ) -> str:
     system_instruction, contents = _build_contents(messages)
+    resolved_model = model or settings.GEMINI_MODEL
+    print(
+        "[Gemini] generate_text",
+        f"model={resolved_model!r}",
+        f"content_turns={len(contents)}",
+        f"system_inst_chars={len(system_instruction or '')}",
+        f"temperature={temperature}",
+        f"max_output_tokens={max_output_tokens!r}",
+        "calling generate_content...",
+    )
     try:
         response = await _get_client().aio.models.generate_content(
-            model=model or settings.GEMINI_MODEL,
+            model=resolved_model,
             contents=contents,
             config=_build_config(
                 system_instruction=system_instruction,
@@ -410,7 +441,10 @@ async def generate_text(
             ),
         )
     except Exception as e:  # pragma: no cover - provider exception types are SDK-owned
+        print("[Gemini] generate_text generate_content raised:", repr(e))
         raise AIServiceError(f"Gemini request failed: {e}") from e
+    _debug_log_gemini_response("generate_text", response)
+    print("[Gemini] generate_text extracting text...")
     return _extract_text(response)
 
 
@@ -436,10 +470,18 @@ async def generate_text_with_tools(
     tool_handlers = {tool.name: tool.handler for tool in function_tools}
     current_contents: list[types.Content] = list(contents)
 
+    resolved_model = model or settings.GEMINI_MODEL
     for tool_round in range(max_tool_calls + 1):
+        print(
+            "[Gemini] generate_text_with_tools",
+            f"model={resolved_model!r}",
+            f"tool_round={tool_round}",
+            f"current_content_turns={len(current_contents)}",
+            "calling generate_content...",
+        )
         try:
             response = await _get_client().aio.models.generate_content(
-                model=model or settings.GEMINI_MODEL,
+                model=resolved_model,
                 contents=current_contents,
                 config=_build_config(
                     system_instruction=system_instruction,
@@ -455,8 +497,15 @@ async def generate_text_with_tools(
         except (
             Exception
         ) as e:  # pragma: no cover - provider exception types are SDK-owned
+            print(
+                "[Gemini] generate_text_with_tools generate_content raised:",
+                repr(e),
+            )
             raise AIServiceError(f"Gemini request failed: {e}") from e
 
+        _debug_log_gemini_response(
+            f"generate_text_with_tools round={tool_round}", response
+        )
         function_calls = _extract_function_calls(response)
         if not function_calls:
             return _extract_text(response)
@@ -506,10 +555,18 @@ async def generate_model_with_tools(
     tool_handlers = {tool.name: tool.handler for tool in function_tools}
     current_contents: list[types.Content] = list(contents)
 
+    resolved_model = model or settings.GEMINI_MODEL
     for tool_round in range(max_tool_calls + 1):
+        print(
+            "[Gemini] generate_model_with_tools",
+            f"model={resolved_model!r}",
+            f"tool_round={tool_round}",
+            f"current_content_turns={len(current_contents)}",
+            "calling generate_content...",
+        )
         try:
             response = await _get_client().aio.models.generate_content(
-                model=model or settings.GEMINI_MODEL,
+                model=resolved_model,
                 contents=current_contents,
                 config=_build_config(
                     system_instruction=system_instruction,
@@ -526,8 +583,15 @@ async def generate_model_with_tools(
         except (
             Exception
         ) as e:  # pragma: no cover - provider exception types are SDK-owned
+            print(
+                "[Gemini] generate_model_with_tools generate_content raised:",
+                repr(e),
+            )
             raise AIServiceError(f"Gemini request failed: {e}") from e
 
+        _debug_log_gemini_response(
+            f"generate_model_with_tools round={tool_round}", response
+        )
         function_calls = _extract_function_calls(response)
         if not function_calls:
             try:
@@ -575,9 +639,21 @@ async def generate_model(
 ) -> _ModelT:
     system_instruction, contents = _build_contents(messages)
     response_schema = normalize_json_schema(response_model.model_json_schema())
+    resolved_model = model or settings.GEMINI_MODEL
+    print(
+        "[Gemini] generate_model",
+        f"response_model={getattr(response_model, '__name__', response_model)!r}",
+        f"model={resolved_model!r}",
+        f"content_turns={len(contents)}",
+        f"system_inst_chars={len(system_instruction or '')}",
+        f"response_json_schema_chars={len(json.dumps(response_schema, default=str))}",
+        f"temperature={temperature}",
+        f"max_output_tokens={max_output_tokens!r}",
+        "calling generate_content...",
+    )
     try:
         response = await _get_client().aio.models.generate_content(
-            model=model or settings.GEMINI_MODEL,
+            model=resolved_model,
             contents=contents,
             config=_build_config(
                 system_instruction=system_instruction,
@@ -587,14 +663,23 @@ async def generate_model(
             ),
         )
     except Exception as e:  # pragma: no cover - provider exception types are SDK-owned
+        print("[Gemini] generate_model generate_content raised:", repr(e))
         raise AIServiceError(f"Gemini request failed: {e}") from e
 
+    _debug_log_gemini_response("generate_model", response)
+    print("[Gemini] generate_model loading structured payload / validate...")
     try:
         payload = _load_structured_payload(response)
         if isinstance(payload, response_model):
-            return payload
-        return response_model.model_validate(payload)
+            out = payload
+        else:
+            out = response_model.model_validate(payload)
+        print(
+            "[Gemini] generate_model validate ok", f"result_type={type(out).__name__}"
+        )
+        return out
     except Exception as e:
+        print("[Gemini] generate_model validate/payload failed:", repr(e))
         preview = _response_preview(response)
         if preview:
             raise AIServiceError(
