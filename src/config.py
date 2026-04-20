@@ -11,9 +11,11 @@ class Config(BaseSettings):
     )
 
     ENVIRONMENT: Environment = Environment.DEVELOPMENT
-    GEMINI_MODEL: str = "gemini-2.5-flash" 
-    PARSING_AGENT_GEMINI_MODEL: str = "gemini-2.5-flash"
-    EXECUTION_AGENT_GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_API_KEY: str | None = None
+    OPENAI_API_KEY: str | None = None
+    GEMINI_MODEL: str = "gemini-3-flash-preview "
+    PARSING_AGENT_GEMINI_MODEL: str = "gemini-3-flash-preview"
+    EXECUTION_AGENT_GEMINI_MODEL: str = "gemini-3-flash-preview"
     EXECUTION_AGENT_MAX_TOOL_CALLS: int = 12
     REDIS_URL: RedisDsn
     FIREBASE_PROJECT_ID: str
@@ -23,8 +25,6 @@ class Config(BaseSettings):
     CLOVER_API_BASE_URL: str
     CLOVER_APP_ID: str | None = None
     RESTAURANT_ID: str
-    GCP_PROJECT_ID: str
-    GCP_LOCATION: str = "global"
 
 
 settings = Config()
