@@ -1523,53 +1523,54 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
             f"[addItemsToOrder] NORMAL PATH: adding {item_id!r} qty={quantity} price={item_price} to order {order_id!r}"
         )
         try:
-            response = await add_clover_line_item(
-                creds["token"],
-                creds["merchant_id"],
-                creds["base_url"],
-                order_id,
-                item_id,
-                quantity,
-                note,
-                item_price,
-            )
-            line_item_id = response["id"]
-            print(
-                f"[addItemsToOrder] line item created: line_item_id={line_item_id!r} price={response.get('price')}"
-            )
-            modifiers_applied: list[str] = []
+            for _ in range(quantity):
+                response = await add_clover_line_item(
+                    creds["token"],
+                    creds["merchant_id"],
+                    creds["base_url"],
+                    order_id,
+                    item_id,
+                    1,
+                    note,
+                    item_price,
+                )
+                line_item_id = response["id"]
+                print(
+                    f"[addItemsToOrder] line item created: line_item_id={line_item_id!r} price={response.get('price')}"
+                )
+                modifiers_applied: list[str] = []
 
-            for mod_id in modifiers:
-                try:
-                    await add_clover_modification(
-                        creds["token"],
-                        creds["merchant_id"],
-                        creds["base_url"],
-                        order_id,
-                        line_item_id,
-                        mod_id,
-                    )
-                    print(
-                        f"[addItemsToOrder] modifier {mod_id!r} applied to line {line_item_id!r}"
-                    )
-                    modifiers_applied.append(mod_id)
-                except Exception as exc:
-                    print(
-                        f"[addItemsToOrder] modifier {mod_id!r} on line {line_item_id!r} failed: {exc!r}"
-                    )
-                    failed_items.append({"itemId": mod_id, "reason": str(exc)})
+                for mod_id in modifiers:
+                    try:
+                        await add_clover_modification(
+                            creds["token"],
+                            creds["merchant_id"],
+                            creds["base_url"],
+                            order_id,
+                            line_item_id,
+                            mod_id,
+                        )
+                        print(
+                            f"[addItemsToOrder] modifier {mod_id!r} applied to line {line_item_id!r}"
+                        )
+                        modifiers_applied.append(mod_id)
+                    except Exception as exc:
+                        print(
+                            f"[addItemsToOrder] modifier {mod_id!r} on line {line_item_id!r} failed: {exc!r}"
+                        )
+                        failed_items.append({"itemId": mod_id, "reason": str(exc)})
 
-            added_items.append(
-                {
-                    "lineItemId": line_item_id,
-                    "itemId": item_id,
-                    "name": item_row.get("name", ""),
-                    "quantity": quantity,
-                    "modifiersApplied": modifiers_applied,
-                    "lineTotal": response.get("price", 0),
-                }
-            )
-            last_added_line_item_id = line_item_id
+                added_items.append(
+                    {
+                        "lineItemId": line_item_id,
+                        "itemId": item_id,
+                        "name": item_row.get("name", ""),
+                        "quantity": 1,
+                        "modifiersApplied": modifiers_applied,
+                        "lineTotal": response.get("price", 0),
+                    }
+                )
+                last_added_line_item_id = line_item_id
 
         except Exception as exc:
             print(f"[addItemsToOrder] item {item_id!r} failed: {exc!r}")
@@ -2123,6 +2124,9 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
         1. ``target["lineitemId"]`` or ``target["lineItemId"]`` provided → exact current line item id.
         2. ``target["orderPosition"]`` provided → 1-indexed position in current line items.
         3. ``target["itemName"]`` provided → fuzzy-search current line item names.
+    
+    newQuantity: int
+        The requested final quantity that was passed to this tool.
 
     Returns a dict:
 
@@ -2250,7 +2254,15 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
             }
 
     matched_name = matched_line_item.get("name", "")
-    previous_quantity = _line_item_quantity(matched_line_item)
+    same_name_items = [li for li in line_items if li.get("name") == matched_name]
+    previous_quantity = len(same_name_items)
+
+    modifications = matched_line_item.get("modifications", {}).get("elements", [])
+    modifier_ids = [
+        m.get("modifier", {}).get("id")
+        for m in modifications
+        if m.get("modifier", {}).get("id")
+    ]
 
     if newQuantity <= 0:
         return {
@@ -2275,39 +2287,53 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
         print(f"[changeItemQuantity] no-op result: {result}")
         return result
 
-    matched_line_item_id = matched_line_item.get("id", "")
-    if not matched_line_item_id:
-        return {
-            "success": False,
-            "itemName": matched_name,
-            "previousQuantity": previous_quantity,
-            "newQuantity": newQuantity,
-            "updatedOrderTotal": 0,
-            "error": "cannot change quantity because the Clover line item id is missing",
-        }
+    item_id = matched_line_item.get("item", {}).get("id", "")
+    item_price = matched_line_item.get("price", 0) or 0
 
-    print(
-        f"[changeItemQuantity] updating line item {matched_line_item_id!r} to qty={newQuantity}"
-    )
-    try:
-        await update_clover_line_item(
-            creds["token"],
-            creds["merchant_id"],
-            creds["base_url"],
-            order_id,
-            matched_line_item_id,
-            quantity=newQuantity,
-        )
-    except Exception as exc:
-        print(f"[changeItemQuantity] update failed: {exc!r}")
-        return {
-            "success": False,
-            "itemName": matched_name,
-            "previousQuantity": previous_quantity,
-            "newQuantity": newQuantity,
-            "updatedOrderTotal": 0,
-            "error": f"failed to update item quantity: {exc}",
-        }
+    if newQuantity > previous_quantity:
+        to_add = newQuantity - previous_quantity
+        print(f"[changeItemQuantity] adding {to_add} line item(s) for {matched_name!r}")
+        try:
+            for _ in range(to_add):
+                response = await add_clover_line_item(
+                    creds["token"], creds["merchant_id"], creds["base_url"],
+                    order_id, item_id, 1, None, item_price
+                )
+                new_line_item_id = response["id"]
+                for mod_id in modifier_ids:
+                    await add_clover_modification(
+                        creds["token"], creds["merchant_id"], creds["base_url"],
+                        order_id, new_line_item_id, mod_id
+                    )
+        except Exception as exc:
+            print(f"[changeItemQuantity] add failed: {exc!r}")
+            return {
+                "success": False,
+                "itemName": matched_name,
+                "previousQuantity": previous_quantity,
+                "newQuantity": newQuantity,
+                "updatedOrderTotal": 0,
+                "error": f"failed to change item quantity: {exc}",
+            }
+    else:
+        to_delete = previous_quantity - newQuantity
+        print(f"[changeItemQuantity] deleting {to_delete} line item(s) for {matched_name!r}")
+        try:
+            for li in same_name_items[:to_delete]:
+                await delete_clover_line_item(
+                    creds["token"], creds["merchant_id"], creds["base_url"],
+                    order_id, li["id"]
+                )
+        except Exception as exc:
+            print(f"[changeItemQuantity] delete failed: {exc!r}")
+            return {
+                "success": False,
+                "itemName": matched_name,
+                "previousQuantity": previous_quantity,
+                "newQuantity": newQuantity,
+                "updatedOrderTotal": 0,
+                "error": f"failed to change item quantity: {exc}",
+            }
 
     updated_total = 0
     try:

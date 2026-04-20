@@ -125,6 +125,10 @@ class TestResultsSaveRequest(BaseModel):
     content: str  # pre-formatted text to write verbatim
 
 
+class ClearSessionRequest(BaseModel):
+    session_id: str
+
+
 class ParsedRequestIntent(str, Enum):
     ADD_ITEM = "add_item"
     MODIFY_ITEM = "modify_item"

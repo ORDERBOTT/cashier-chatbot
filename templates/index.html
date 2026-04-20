@@ -727,7 +727,12 @@
 
   // ── Clear ──────────────────────────────────────────────────────
 
-  clearBtn.addEventListener("click", () => {
+  clearBtn.addEventListener("click", async () => {
+    await fetch("/api/bot/clear-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: SESSION_ID }),
+    });
     messagesEl.innerHTML = "";
     renderOrderState(null);
     document.getElementById("expected-section").style.display = "none";

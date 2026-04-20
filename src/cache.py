@@ -34,6 +34,12 @@ async def cache_flush_all() -> None:
     await redis.flushall()
 
 
+async def cache_delete_pattern(pattern: str) -> None:
+    keys = await redis.keys(pattern)
+    if keys:
+        await redis.delete(*keys)
+
+
 async def cache_list_length(key: str) -> int:
     return await redis.llen(key)
 
