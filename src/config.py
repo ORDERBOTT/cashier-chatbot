@@ -25,6 +25,7 @@ class Config(BaseSettings):
     RESTAURANT_ID: str
     GCP_PROJECT_ID: str
     GCP_LOCATION: str = "us-central1"
+    ESCALATION_URL: str | None = None
 
 
 settings = Config()

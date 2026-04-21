@@ -3416,23 +3416,24 @@ async def getItemsNotAvailableToday(merchant_id: str, creds: dict | None = None)
     return {"success": True, "unavailable_items": unavailable, "error": None}
 
 
-async def humanInterventionNeeded(session_id: str, reason: str) -> dict:
-    """Flag a session for human review and store the escalation reason in Redis.
+async def humanInterventionNeeded(session_id: str, reason: str, merchant_id: str) -> dict:
+    """Flag a session for human review by calling the escalation webhook.
 
     Call this when the customer's intent is ``escalation`` or when the situation
     cannot be resolved automatically (e.g., repeated failures, complaints, or
     requests outside system capability).
 
     Args:
-        session_id: The chat session identifier used to store the escalation flag.
+        session_id: The chat session identifier.
         reason: A short plain-text description of why human intervention is needed.
             Do not include customer PII.
+        merchant_id: The merchant identifier associated with this session.
 
     Returns a dict:
         success (bool)
-            True when the escalation was recorded.
+            True when the escalation endpoint returned a 2xx response.
         escalated (bool)
-            True when the flag was written to Redis successfully.
+            True when the request was sent and accepted.
         error (str | None)
             Human-readable reason for failure, or None on success.
 
@@ -3440,12 +3441,20 @@ async def humanInterventionNeeded(session_id: str, reason: str) -> dict:
         - ``success`` True → tell the customer a team member will follow up.
         - ``success`` False → still inform the customer and advise them to call the store.
     """
-    print(f"[humanInterventionNeeded] session_id={session_id!r} reason={reason!r}")
-    escalation_key = f"escalation:{session_id}"
+    print(f"[humanInterventionNeeded] session_id={session_id!r} reason={reason!r} merchant_id={merchant_id!r}")
+    timestamp = datetime.now(timezone.utc).isoformat()
+    payload = {"order_id": session_id, "reason": reason, "timestamp": timestamp, "user_id": merchant_id}
+
+    escalation_url = settings.ESCALATION_URL
+    if not escalation_url:
+        print("[humanInterventionNeeded] ESCALATION_URL not configured")
+        return {"success": False, "escalated": False, "error": "ESCALATION_URL is not configured"}
+
     try:
-        payload = json.dumps({"reason": reason, "timestamp": datetime.now(timezone.utc).isoformat()})
-        await cache_set(escalation_key, payload, ttl=_SESSION_CLOVER_ORDER_REDIS_TTL_SECONDS)
-        print(f"[humanInterventionNeeded] escalation recorded key={escalation_key!r}")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(escalation_url, json=payload)
+            response.raise_for_status()
+        print(f"[humanInterventionNeeded] escalation sent status={response.status_code}")
         return {"success": True, "escalated": True, "error": None}
     except Exception as exc:
         print(f"[humanInterventionNeeded] failed: {exc!r}")

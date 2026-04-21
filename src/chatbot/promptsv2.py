@@ -513,8 +513,9 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
     For MENU_QUESTION (customer asks what is available or off today):
     - Call getItemsNotAvailableToday() → list unavailable items.
 
-    For ESCALATION or unresolvable situation:
-    - Call humanInterventionNeeded(reason) → flag session for human review.
+    For ESCALATION or unresolvable situation (including ANY customer request to speak to a human, manager, or staff):
+    - You MUST call humanInterventionNeeded(reason) FIRST before composing your reply.
+    - After the tool returns, tell the customer a team member will follow up (success=True) or advise them to call the store directly (success=False).
 
     For questions about past orders:
     - Call getPreviousOrdersDetails(limit) → fetch order history.

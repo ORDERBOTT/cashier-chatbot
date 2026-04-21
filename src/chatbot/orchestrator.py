@@ -1057,6 +1057,7 @@ class ExecutionAgent:
             out = await humanInterventionNeeded(
                 session_id=runtime.context.session_id,
                 reason=reason,
+                merchant_id=runtime.context.merchant_id or "",
             )
             _log_tool_call_io("humanInterventionNeeded", args, out)
             return out
@@ -1160,7 +1161,11 @@ class ExecutionAgent:
             ),
             gemini_client.GeminiFunctionTool(
                 name="humanInterventionNeeded",
-                description="Flag the session for human review when the situation cannot be resolved automatically.",
+                description=(
+                    "MUST be called whenever the customer asks to speak to a human, manager, or staff member, "
+                    "OR when the intent is escalation, OR when the situation cannot be resolved automatically. "
+                    "Always call this before responding to the customer in these cases."
+                ),
                 parameters_json_schema=_HUMAN_INTERVENTION_NEEDED_PARAMETERS_JSON_SCHEMA,
                 handler=_human_intervention_needed_tool,
             ),
