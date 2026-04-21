@@ -131,6 +131,20 @@ class OrderValidationResult(BaseModel):
     follow_up_requirements: list[OrderFollowUpRequirement] = Field(default_factory=list)
 
 
+class ResolvedModifierItem(BaseModel):
+    modifierId: str
+    name: str
+    groupId: str
+    groupName: str
+    price: int = 0
+
+
+class ModifierResolutionResult(BaseModel):
+    resolved: list[ResolvedModifierItem] = Field(default_factory=list)
+    as_note: list[str] = Field(default_factory=list)
+    unresolvable: list[str] = Field(default_factory=list)
+
+
 class OrderProcessingOutcome(BaseModel):
     previous_order: dict = Field(default_factory=dict)
     accepted_order: dict = Field(default_factory=dict)

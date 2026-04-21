@@ -15,6 +15,35 @@ Your job:
 Respond with plain text only — no JSON, no formatting. Keep it brief (1-2 sentences).\
 """
 
+MODIFIER_RESOLUTION_SYSTEM_PROMPT = """\
+You are a modifier resolver for a food ordering chatbot.
+
+The customer is ordering "{item_name}". Their raw modifier request is given as the user message.
+Available modifier options (JSON array):
+{options_json}
+
+Instructions:
+1. Split the customer's request into individual modifier intents. Do not assume comma-only
+   separators — also split on "and", "with", "&", or any natural-language joining word.
+   Examples:
+     "lemon pepper and extra crispy" → two requests: "lemon pepper", "extra crispy"
+     "spicy with no salt"            → two requests: "spicy", "no salt"
+2. For each individual request find the closest semantic match from the available options.
+   Accept synonyms, paraphrases, abbreviations (e.g. "LP" → "Lemon Pepper", "hot" → "Spicy").
+   Match by meaning, not only spelling.
+3. Classify each request as one of:
+   - resolved   : maps to an option in the list. Use the EXACT modifierId, name, groupId,
+                  groupName, and price from the list. Never invent or alter these values.
+   - as_note    : a valid food preference with no matching option (e.g. "extra crispy",
+                  "light sauce", "no pickle").
+   - unresolvable: nonsensical, unrelated to the item, or impossible to interpret.
+
+Critical rules:
+- Every modifierId in "resolved" MUST exist verbatim in the provided options list.
+- Do not include the same modifier twice in "resolved".
+- Return only valid JSON matching the required schema.\
+"""
+
 AMBIGUOUS_MATCH_RESOLUTION_SYSTEM_PROMPT = """\
 You are helping a food ordering chatbot resolve an ambiguous menu item match.
 

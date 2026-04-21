@@ -86,6 +86,11 @@ DEFAULT_PARSING_AGENT_PROMPTS = ParsingAgentPrompts(
         Only extract what is clearly stated.
         USE PREVIOUS AGENT QUESTIONS FOR CONTEXT
         If previous_agent_questions is non-empty, interpret the customer's most recent message as a direct response to the last question in that list before assigning intent and request details.
+        CLARIFICATION RESPONSE RULE
+        Before applying "NO THANKS / NOTHING ELSE → CONFIRM_ORDER", inspect the content of previous_agent_questions.
+        If the last agent question asks the customer to CHOOSE between options or CONFIRM a specific item/modifier (e.g. "Did you mean X or Y?", "Which flavour?", "Is that the small or large?", "Which one did you want?"), the customer's response is answering that clarification — NOT confirming the order.
+        Classify it as the same intent as the original request (add_item, modify_item, etc.) and carry the chosen value forward in Request_items.details or Request_items.name as appropriate.
+        Only apply the confirm_order rule when the last agent question is a closing question such as "Do you want to add anything else?", "Is that everything?", "Anything else?", or a pickup-time confirmation.
         NO THANKS / NOTHING ELSE → CONFIRM_ORDER
         If the customer's message is a direct response to "Do you want to add anything else?"
         and the customer declines (e.g., "No", "Nope", "That's it", "I'm good", "Nothing else",
@@ -286,6 +291,42 @@ DEFAULT_PARSING_AGENT_PROMPTS = ParsingAgentPrompts(
             "Confidence_level": "high",
             "Request_items": {"name": "", "quantity": 0, "details": ""},
             "Request_details": "Yes."
+          }
+        ]
+        --- Example 7 ---
+        previous_agent_questions: ["Did you mean Lemon Pepper or BBQ?"]
+        Transcript:
+        C: Lemon pepper please.
+        "Message_1": [
+          {
+            "Intent": "modify_item",
+            "Confidence_level": "high",
+            "Request_items": {"name": "", "quantity": 0, "details": "Lemon Pepper"},
+            "Request_details": "Customer confirmed Lemon Pepper in response to modifier clarification question."
+          }
+        ]
+        --- Example 8 ---
+        previous_agent_questions: ["Did you mean the Classic Burger or the Smash Burger?"]
+        Transcript:
+        C: Yes, the first one.
+        "Message_1": [
+          {
+            "Intent": "add_item",
+            "Confidence_level": "high",
+            "Request_items": {"name": "Classic Burger", "quantity": 1, "details": ""},
+            "Request_details": "Customer selected Classic Burger in response to item disambiguation question."
+          }
+        ]
+        --- Example 9 ---
+        previous_agent_questions: ["Which flavor would you like — Lemon Pepper, Mango Habanero, or Plain?"]
+        Transcript:
+        C: Yeah lemon pepper.
+        "Message_1": [
+          {
+            "Intent": "modify_item",
+            "Confidence_level": "high",
+            "Request_items": {"name": "", "quantity": 0, "details": "Lemon Pepper"},
+            "Request_details": "Customer answered flavor clarification with Lemon Pepper."
           }
         ]
         """

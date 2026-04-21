@@ -1,7 +1,13 @@
+import json
 from dataclasses import dataclass
 
-from src.chatbot.clarification.prompts import AMBIGUOUS_MATCH_RESOLUTION_SYSTEM_PROMPT, NOT_FOUND_ITEM_RESOLUTION_SYSTEM_PROMPT
+from src.chatbot.clarification.prompts import (
+    AMBIGUOUS_MATCH_RESOLUTION_SYSTEM_PROMPT,
+    MODIFIER_RESOLUTION_SYSTEM_PROMPT,
+    NOT_FOUND_ITEM_RESOLUTION_SYSTEM_PROMPT,
+)
 from src.chatbot.gemini_client import generate_model, generate_text
+from src.chatbot.internal_schemas import ModifierResolutionResult
 from src.chatbot.llm_messages import chat_history_from_messages
 from src.chatbot.schema import Message
 from src.chatbot.structured_schemas import AmbiguousMatchResolutionPayload
@@ -61,3 +67,29 @@ async def resolve_not_found_item(
         {"role": "user", "content": latest_message},
     ]
     return await generate_text(messages, temperature=0)
+
+
+async def resolve_modifiers_for_item(
+    details: str,
+    item_name: str,
+    available_options: list[dict],
+) -> ModifierResolutionResult:
+    slim_options = [
+        {
+            "modifierId": opt["modifierId"],
+            "name": opt["name"],
+            "groupId": opt["groupId"],
+            "groupName": opt["groupName"],
+            "price": opt.get("price", 0),
+        }
+        for opt in available_options
+    ]
+    system_content = MODIFIER_RESOLUTION_SYSTEM_PROMPT.format(
+        item_name=item_name,
+        options_json=json.dumps(slim_options, ensure_ascii=False),
+    )
+    messages: list[dict] = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": details},
+    ]
+    return await generate_model(messages, ModifierResolutionResult, temperature=0)
