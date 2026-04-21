@@ -413,6 +413,9 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
     Process in order received
     Execute step-by-step
     Keep internal consistency of order state
+    CRITICAL: Do NOT respond to the customer between intents. Complete ALL intents
+    (or reach a ▶ STOP condition on one of them) before generating any text response.
+    Only produce a single customer reply at the very end, summarizing all actions taken.
 
     RESPONSE STYLE
     Short, clear SMS-style replies
@@ -460,7 +463,9 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
        - missingRequireChoice non-empty  ▶ STOP → ask customer to choose from the listed required groups
        - allValid == True                → IMMEDIATELY call addItemsToOrder (do NOT return text yet)
     2. Call addItemsToOrder(items) using itemId, valid modifier IDs, and asNote joined as note.
-       After this call returns → respond to the customer confirming the item was added.
+       After this call returns → if there are more intents remaining, continue to the next intent
+       immediately (do NOT output text). After all intents are processed (or a STOP is reached),
+       respond once to the customer summarizing everything.
 
     For MODIFY_ITEM:
     PRE-CHECK — Order existence: Before calling any tool, inspect the current order
@@ -475,28 +480,37 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
          Apply the same STOP conditions as ADD_ITEM.
          - allValid == True              → IMMEDIATELY call addItemsToOrder (do NOT return text yet)
       2. Call addItemsToOrder(items) using itemId, valid modifier IDs, and asNote.
-         After this call returns → respond to the customer confirming the item was added
-         with the requested modification already applied.
+         After this call returns → if there are more intents remaining, continue to the next intent
+         immediately (do NOT output text). After all intents are processed (or a STOP is reached),
+         respond once to the customer summarizing everything (including the modification already applied).
 
     Normal MODIFY_ITEM flow (order already has items):
     1. Call validateRequestedItem(itemName, details). Apply same STOP conditions as ADD_ITEM.
        - allValid == True                → IMMEDIATELY call updateItemInOrder (do NOT return text yet)
     2. Call updateItemInOrder(target, updates).
-       After this call returns → respond to the customer confirming the modification.
+       After this call returns → if there are more intents remaining, continue to the next intent
+       immediately (do NOT output text). After all intents are processed (or a STOP is reached),
+       respond once to the customer summarizing everything.
 
     For REPLACE_ITEM:
     1. Call validateRequestedItem(replacement_item_name, details). Apply same STOP conditions as ADD_ITEM.
        - allValid == True                → IMMEDIATELY call replaceItemInOrder (do NOT return text yet)
     2. Call replaceItemInOrder(itemName, replacement).
-       After this call returns → respond to the customer confirming the replacement.
+       After this call returns → if there are more intents remaining, continue to the next intent
+       immediately (do NOT output text). After all intents are processed (or a STOP is reached),
+       respond once to the customer summarizing everything.
 
     For REMOVE_ITEM:
     - Call removeItemFromOrder(target) directly (no menu validation needed).
-      After it returns → respond to the customer confirming removal.
+      After it returns → if there are more intents remaining, continue to the next intent
+      immediately (do NOT output text). After all intents are processed (or a STOP is reached),
+      respond once to the customer summarizing everything.
 
     For CHANGE_ITEM_NUMBER:
     - Call changeItemQuantity(target, newQuantity) directly.
-      After it returns → respond to the customer confirming the quantity change.
+      After it returns → if there are more intents remaining, continue to the next intent
+      immediately (do NOT output text). After all intents are processed (or a STOP is reached),
+      respond once to the customer summarizing everything.
 
     For CONFIRM_ORDER:
     1. Call calcOrderPrice() → get total.
