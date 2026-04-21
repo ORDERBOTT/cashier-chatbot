@@ -32,6 +32,7 @@ class FuzzyMatcher:
         menu_names: list[str],
         message_history: list[Message] | None = None,
         latest_message: str = "",
+        menu_name_aliases: list[tuple[str, str]] | None = None,
     ) -> _MatchResult:
         if not menu_names:
             return _MatchResult(item=item, status="not_found")
@@ -40,15 +41,51 @@ class FuzzyMatcher:
         for name in menu_names:
             if name.lower() == item.name.lower():
                 return _MatchResult(item=item, status="confirmed", canonical_name=name)
-        
+
+        # Exact alias match: treat a customer term like "coke" as an ordered
+        # item if it maps to exactly one canonical name.
+        if menu_name_aliases:
+            alias_targets = {
+                canonical
+                for alias, canonical in menu_name_aliases
+                if alias.lower() == item.name.lower()
+            }
+            if len(alias_targets) == 1:
+                return _MatchResult(
+                    item=item,
+                    status="confirmed",
+                    canonical_name=next(iter(alias_targets)),
+                )
+
         print(item.name)
 
-        top_matches = process.extract(
+        # Search against both canonical names and alias surface forms, then
+        # collapse the resulting scores back to canonical names so one item
+        # never appears twice in the candidate list.
+        search_entries: list[tuple[str, str]] = [(n, n) for n in menu_names]
+        if menu_name_aliases:
+            search_entries.extend(menu_name_aliases)
+        search_surface = [surface for surface, _canonical in search_entries]
+
+        raw_matches = process.extract(
             item.name,
-            menu_names,
+            search_surface,
             scorer=_combined_scorer,
-            limit=5,
-        )  # [(name, score, index), ...]
+            limit=max(5, len(search_entries)),
+        )  # [(surface, score, index), ...]
+
+        best_by_canonical: dict[str, float] = {}
+        for _surface, score, idx in raw_matches:
+            canonical = search_entries[idx][1]
+            if score > best_by_canonical.get(canonical, -1.0):
+                best_by_canonical[canonical] = score
+
+        top_matches: list[tuple[str, float, int]] = [
+            (canonical, score, i)
+            for i, (canonical, score) in enumerate(
+                sorted(best_by_canonical.items(), key=lambda kv: kv[1], reverse=True)
+            )
+        ][:5]
         print(f"top_matches: {top_matches}")
 
         if not top_matches or top_matches[0][1] < LOW_MENU_MATCH_THRESHOLD:

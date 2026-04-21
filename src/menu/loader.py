@@ -315,6 +315,65 @@ async def get_menu_item_names() -> list[str]:
     return [item["name"] for item in _items_by_name.values()]
 
 
+# Container-style prefixes on drink item names. Stripping these yields the
+# colloquial name customers actually use ("Can Coke" -> "Coke"). Keep in sync
+# with Clover naming conventions for the Drinks category.
+_DRINK_CONTAINER_PREFIXES: tuple[str, ...] = (
+    "can ",
+    "glass ",
+    "bottle ",
+    "bottled ",
+    "fountain ",
+    "draft ",
+    "draught ",
+)
+
+# Generic drink terms that should map to the full drinks catalog so fuzzy
+# matching treats them as ambiguous (handled downstream by the AI resolver)
+# instead of silently missing. Keyed lower-case.
+_GENERIC_DRINK_TERMS: tuple[str, ...] = ("soda", "pop", "soft drink", "beverage")
+
+
+def _strip_drink_container_prefix(name: str) -> str | None:
+    """Return the colloquial drink name after stripping a container prefix, or None."""
+    lower = name.lower()
+    for prefix in _DRINK_CONTAINER_PREFIXES:
+        if lower.startswith(prefix):
+            remainder = name[len(prefix):].strip()
+            return remainder or None
+    return None
+
+
+async def get_menu_item_name_aliases() -> list[tuple[str, str]]:
+    """Return ``(alias, canonical_name)`` pairs for fuzzy matching.
+
+    Aliases let customers use colloquial terms ("coke", "sprite", "soda") that
+    don't appear verbatim on the menu. Drink-category items get:
+      * container-prefix-stripped alias (e.g. ``Can Coke`` -> ``Coke``),
+      * each generic term (``soda``, ``pop``, ...) mapped to every drink so the
+        matcher sees them as ambiguous candidates for AI resolution.
+    """
+    aliases: list[tuple[str, str]] = []
+    drink_canonicals: list[str] = []
+
+    for item in _items_by_name.values():
+        canonical = item["name"]
+        category = (item.get("category_name") or "").lower()
+        is_drink = "drink" in category or "beverage" in category
+
+        if is_drink:
+            drink_canonicals.append(canonical)
+            stripped = _strip_drink_container_prefix(canonical)
+            if stripped and stripped.lower() != canonical.lower():
+                aliases.append((stripped, canonical))
+
+    for generic in _GENERIC_DRINK_TERMS:
+        for canonical in drink_canonicals:
+            aliases.append((generic, canonical))
+
+    return aliases
+
+
 async def get_menu_item_names_set() -> set[str]:
     """Return the set of all menu item display names for O(1) membership tests.
 
