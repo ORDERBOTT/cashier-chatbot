@@ -19,6 +19,7 @@ from src.cache import (
     init_redis,
 )
 from src.chatbot.cart.ai_client import classify_modifier_or_addon_request
+from src.chatbot.clarification.ai_resolver import resolve_modifiers_for_item
 from src.chatbot.clarification.constants import (
     AMBIGUITY_GAP,
     CONFIRMED_THRESHOLD,
@@ -1230,107 +1231,53 @@ async def validateRequestedItem(
             print(f"[validateRequestedItem] return no_details result={result!r}")
             return result
 
-        raw_mods = [
-            m.strip()
-            for part in details.replace(";", ",").split(",")
-            if (m := part.strip())
-        ]
-        print(f"[validateRequestedItem] raw_mods={raw_mods!r}")
+        resolution = await resolve_modifiers_for_item(
+            details=details,
+            item_name=str(item_row.get("name", "")).strip(),
+            available_options=flattened_options,
+        )
+        print(
+            "[validateRequestedItem] ai_resolution "
+            f"resolved_count={len(resolution.resolved)} "
+            f"as_note={resolution.as_note!r} "
+            f"unresolvable={resolution.unresolvable!r}"
+        )
 
+        option_by_id = {opt["modifierId"]: opt for opt in flattened_options}
         valid: list[dict] = []
-        initially_invalid: list[str] = []
+        as_note: list[str] = list(resolution.as_note)
+        truly_invalid: list[str] = list(resolution.unresolvable)
         selected_keys: set[tuple[str, str]] = set()
 
-        for raw_mod in raw_mods:
-            match = _match_requested_modifier(raw_mod, flattened_options)
-            if match is None:
-                initially_invalid.append(raw_mod)
+        for item in resolution.resolved:
+            opt = option_by_id.get(item.modifierId)
+            if opt is None:
                 print(
-                    "[validateRequestedItem] modifier no_match "
-                    f"raw={raw_mod!r}"
+                    "[validateRequestedItem] ai_resolved_id_not_found "
+                    f"modifierId={item.modifierId!r} name={item.name!r}"
                 )
+                truly_invalid.append(item.name)
                 continue
-
-            selection_key = (match["groupId"], match["modifierId"])
+            selection_key = (opt["groupId"], opt["modifierId"])
             if selection_key in selected_keys:
                 print(
-                    "[validateRequestedItem] modifier duplicate_skipped "
+                    "[validateRequestedItem] ai_resolved_duplicate "
                     f"selection_key={selection_key!r}"
                 )
                 continue
-
             selected_keys.add(selection_key)
             valid.append(
                 {
-                    "requested": raw_mod,
-                    "modifierId": match["modifierId"],
-                    "name": match["name"],
-                    "price": match["price"],
-                    "groupId": match["groupId"],
-                    "groupName": match["groupName"],
+                    "requested": item.name,
+                    "modifierId": opt["modifierId"],
+                    "name": opt["name"],
+                    "price": opt["price"],
+                    "groupId": opt["groupId"],
+                    "groupName": opt["groupName"],
                 }
             )
 
         missing_require_choice = _required_modifier_groups(item_row, selected_keys)
-
-        # --- classify initially_invalid mods as note or truly invalid ---
-        as_note: list[str] = []
-        truly_invalid: list[str] = []
-        item_name_str = str(item_row.get("name", "")).strip()
-        modifier_groups = _item_modifier_groups(item_row)
-
-        for raw_mod in initially_invalid:
-            cleaned = _clean_modifier_request(raw_mod)
-            if not cleaned:
-                continue
-
-            candidates_for_addon = _modifier_or_addon_candidates(
-                cleaned, flattened_options
-            )
-            print(
-                "[validateRequestedItem] addon_check "
-                f"raw={raw_mod!r} candidates_count={len(candidates_for_addon)}"
-            )
-
-            if not candidates_for_addon:
-                truly_invalid.append(raw_mod)
-                print(
-                    "[validateRequestedItem] addon_no_candidates → invalid "
-                    f"raw={raw_mod!r}"
-                )
-                continue
-
-            try:
-                classification_result = await classify_modifier_or_addon_request(
-                    item_name=item_name_str,
-                    requested_modification=cleaned,
-                    candidate_modifiers=candidates_for_addon,
-                    modifier_groups=modifier_groups,
-                )
-            except AIServiceError as exc:
-                print(
-                    "[validateRequestedItem] addon_classification_failed "
-                    f"raw={raw_mod!r} exc={exc!r}"
-                )
-                truly_invalid.append(raw_mod)
-                continue
-
-            addon_result = _validated_modifier_or_addon_result(
-                classification_result,
-                cleaned,
-                flattened_options,
-            )
-            print(
-                "[validateRequestedItem] addon_result "
-                f"raw={raw_mod!r} isAddon={addon_result.get('isAddon')!r} "
-                f"suggestedNote={addon_result.get('suggestedNote')!r}"
-            )
-
-            if addon_result.get("isAddon") and addon_result.get("suggestedNote") is not None:
-                as_note.append(addon_result["suggestedNote"])
-            else:
-                truly_invalid.append(raw_mod)
-
         all_valid = not truly_invalid and not missing_require_choice
         result = {
             **base,
