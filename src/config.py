@@ -11,7 +11,7 @@ class Config(BaseSettings):
     )
 
     ENVIRONMENT: Environment = Environment.DEVELOPMENT
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-3-flash-pr"
     PARSING_AGENT_GEMINI_MODEL: str = "gemini-2.5-flash"
     EXECUTION_AGENT_GEMINI_MODEL: str = "gemini-2.5-flash"
     EXECUTION_AGENT_MAX_TOOL_CALLS: int = 12
