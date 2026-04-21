@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 from src import firebase as _firebase
-from src.chatbot import gemini_client
+from src.chatbot import llm_client as gemini_client
 from src.chatbot.constants import _PARSE_VALIDATION_ERROR_PREFIX
 from src.chatbot.exceptions import AIServiceError
 from src.chatbot.llm_messages import LLMMessage

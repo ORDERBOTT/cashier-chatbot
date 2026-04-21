@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from src.chatbot import gemini_client
+from src.chatbot import llm_client
 from src.chatbot import orchestrator as orchestrator_mod
 from src.chatbot.exceptions import AIServiceError
 from src.chatbot.gemini_client import GeminiFunctionTool
@@ -107,7 +108,7 @@ def test_execution_agent_adds_item_and_records_tracker(monkeypatch):
         await handlers["addItemsToOrder"](items=[{"itemId": "item-1", "quantity": 1}])
         return "Added 1 x Burger."
 
-    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    monkeypatch.setattr(llm_client, "generate_text_with_tools", fake_generate)
     _mock_save_clarification(monkeypatch)
     _mock_get_clarification(monkeypatch)
 
@@ -144,7 +145,7 @@ def test_execution_agent_returns_pending_clarification_for_low_confidence(monkey
     ):
         return "Can you clarify that request?"
 
-    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    monkeypatch.setattr(llm_client, "generate_text_with_tools", fake_generate)
     _mock_save_clarification(monkeypatch)
     _mock_get_clarification(monkeypatch)
 
@@ -180,7 +181,7 @@ def test_execution_agent_replaces_item_and_records_tracker(monkeypatch):
         )
         return "Replaced Regular Fries with Onion Rings."
 
-    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    monkeypatch.setattr(llm_client, "generate_text_with_tools", fake_generate)
 
     async def fake_replace(
         session_id, replacement, *, lineItemId=None, orderPosition=None, itemName=None, creds=None
@@ -232,7 +233,7 @@ def test_execution_agent_removes_item_and_records_tracker(monkeypatch):
         await handlers["removeItemFromOrder"](target={"itemName": "Fries"})
         return "Removed Fries."
 
-    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    monkeypatch.setattr(llm_client, "generate_text_with_tools", fake_generate)
 
     async def fake_remove(session_id, target, creds=None):
         return {
@@ -273,7 +274,7 @@ def test_execution_agent_confirm_order_records_tracker(monkeypatch):
         await handlers["confirmOrder"]()
         return "Your order is confirmed."
 
-    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    monkeypatch.setattr(llm_client, "generate_text_with_tools", fake_generate)
 
     async def fake_calc(session_id, creds=None):
         return {"success": True, "total": 1165, "error": None}
@@ -326,7 +327,7 @@ def test_execution_agent_cancel_order_records_tracker(monkeypatch):
         await handlers["cancelOrder"]()
         return "Your order has been cancelled."
 
-    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    monkeypatch.setattr(llm_client, "generate_text_with_tools", fake_generate)
 
     async def fake_cancel(session_id, creds=None):
         return {"success": True, "error": None}
@@ -366,7 +367,7 @@ def test_execution_agent_update_item_records_tracker(monkeypatch):
         )
         return "Updated Burger."
 
-    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    monkeypatch.setattr(llm_client, "generate_text_with_tools", fake_generate)
 
     async def fake_update(session_id, target, updates, creds=None):
         return {
@@ -411,7 +412,7 @@ def test_execution_agent_change_quantity_records_tracker(monkeypatch):
         )
         return "Changed Burger to 3."
 
-    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    monkeypatch.setattr(llm_client, "generate_text_with_tools", fake_generate)
 
     async def fake_change(session_id, target, new_quantity, creds=None):
         return {"success": True, "itemName": "Burger", "newQuantity": 3, "error": None}
@@ -446,7 +447,7 @@ def test_execution_agent_no_mutations_when_llm_does_not_call_tools(monkeypatch):
     ):
         return "What would you like to order?"
 
-    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    monkeypatch.setattr(llm_client, "generate_text_with_tools", fake_generate)
     _mock_save_clarification(monkeypatch)
     _mock_get_clarification(monkeypatch)
 
@@ -484,7 +485,7 @@ def test_execution_agent_uses_execution_prompt_with_text_tool_calling(monkeypatc
         return "Customer-facing SMS"
 
     monkeypatch.setattr(
-        gemini_client, "generate_text_with_tools", _fake_generate_text_with_tools
+        llm_client, "generate_text_with_tools", _fake_generate_text_with_tools
     )
     _mock_save_clarification(monkeypatch)
     _mock_get_clarification(monkeypatch)
@@ -545,7 +546,7 @@ def test_execution_agent_passes_all_tools_to_llm(monkeypatch):
         return "ok"
 
     monkeypatch.setattr(
-        gemini_client, "generate_text_with_tools", _fake_generate_text_with_tools
+        llm_client, "generate_text_with_tools", _fake_generate_text_with_tools
     )
     _mock_save_clarification(monkeypatch)
     _mock_get_clarification(monkeypatch)
@@ -691,7 +692,7 @@ def test_execution_agent_retries_gemini_503_then_succeeds(monkeypatch):
             ) from _FakeGemini503()
         return "Recovered after outages."
 
-    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    monkeypatch.setattr(llm_client, "generate_text_with_tools", fake_generate)
     _mock_save_clarification(monkeypatch)
     _mock_get_clarification(monkeypatch)
 
@@ -719,7 +720,7 @@ def test_execution_agent_stops_after_ten_gemini_503_attempts(monkeypatch):
         calls += 1
         raise AIServiceError("Gemini request failed: unavailable") from _FakeGemini503()
 
-    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    monkeypatch.setattr(llm_client, "generate_text_with_tools", fake_generate)
     _mock_save_clarification(monkeypatch)
     _mock_get_clarification(monkeypatch)
 
@@ -748,7 +749,7 @@ def test_execution_agent_does_not_retry_non_503_gemini_errors(monkeypatch):
         calls += 1
         raise AIServiceError("Gemini request failed: rate limited") from RuntimeError()
 
-    monkeypatch.setattr(gemini_client, "generate_text_with_tools", fake_generate)
+    monkeypatch.setattr(llm_client, "generate_text_with_tools", fake_generate)
     _mock_save_clarification(monkeypatch)
     _mock_get_clarification(monkeypatch)
 

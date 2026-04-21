@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.chatbot import gemini_client
+from src.chatbot import llm_client
 from src.chatbot import orchestrator as orchestrator_mod
 from src.chatbot.exceptions import AIServiceError
 from src.chatbot.orchestrator import ParsingAgent
@@ -88,7 +89,7 @@ def test_parsing_agent_returns_structured_requests(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(gemini_client, "generate_model", _fake_generate_model)
+    monkeypatch.setattr(llm_client, "generate_model", _fake_generate_model)
 
     result = asyncio.run(ParsingAgent().run(context=_context()))
 
@@ -149,7 +150,7 @@ def test_parsing_agent_retries_once_on_parse_validation_error(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(gemini_client, "generate_model", _fake_generate_model)
+    monkeypatch.setattr(llm_client, "generate_model", _fake_generate_model)
 
     result = asyncio.run(ParsingAgent().run(context=_context()))
 
@@ -168,7 +169,7 @@ def test_parsing_agent_raises_after_retry_failure(monkeypatch):
             "Failed to parse Gemini structured response: still invalid"
         )
 
-    monkeypatch.setattr(gemini_client, "generate_model", _fake_generate_model)
+    monkeypatch.setattr(llm_client, "generate_model", _fake_generate_model)
 
     with pytest.raises(AIServiceError, match="Parsing agent failed after retry"):
         asyncio.run(ParsingAgent().run(context=_context()))
@@ -208,7 +209,7 @@ def test_parsing_agent_retries_gemini_503_then_succeeds(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(gemini_client, "generate_model", _fake_generate_model)
+    monkeypatch.setattr(llm_client, "generate_model", _fake_generate_model)
 
     result = asyncio.run(ParsingAgent().run(context=_context()))
 
@@ -228,7 +229,7 @@ def test_parsing_agent_stops_after_ten_gemini_503_attempts(monkeypatch):
         calls += 1
         raise AIServiceError("Gemini request failed: unavailable") from _FakeGemini503()
 
-    monkeypatch.setattr(gemini_client, "generate_model", _fake_generate_model)
+    monkeypatch.setattr(llm_client, "generate_model", _fake_generate_model)
 
     with pytest.raises(AIServiceError, match="Gemini request failed"):
         asyncio.run(ParsingAgent().run(context=_context()))
@@ -248,7 +249,7 @@ def test_parsing_agent_does_not_retry_non_503_gemini_errors(monkeypatch):
         calls += 1
         raise AIServiceError("Gemini request failed: rate limited") from RuntimeError()
 
-    monkeypatch.setattr(gemini_client, "generate_model", _fake_generate_model)
+    monkeypatch.setattr(llm_client, "generate_model", _fake_generate_model)
 
     with pytest.raises(AIServiceError, match="Gemini request failed"):
         asyncio.run(ParsingAgent().run(context=_context()))

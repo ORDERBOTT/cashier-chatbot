@@ -11,10 +11,15 @@ class Config(BaseSettings):
     )
 
     ENVIRONMENT: Environment = Environment.DEVELOPMENT
+    AI_MODE: str = "chatgpt"  # "gemini" | "chatgpt"
     GEMINI_MODEL: str = "gemini-2.5-flash"
     PARSING_AGENT_GEMINI_MODEL: str = "gemini-2.5-flash"
     EXECUTION_AGENT_GEMINI_MODEL: str = "gemini-2.5-flash"
     EXECUTION_AGENT_MAX_TOOL_CALLS: int = 12
+    OPENAI_API_KEY: str | None = None
+    OPENAI_MODEL: str = "gpt-5.4"
+    PARSING_AGENT_OPENAI_MODEL: str = "gpt-5.4"
+    EXECUTION_AGENT_OPENAI_MODEL: str = "gpt-5.4"
     REDIS_URL: RedisDsn
     FIREBASE_PROJECT_ID: str
     FIREBASE_CLIENT_EMAIL: str
