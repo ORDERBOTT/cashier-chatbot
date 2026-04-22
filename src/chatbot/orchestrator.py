@@ -49,7 +49,7 @@ from src.chatbot.tools import (
     prepare_clover_data,
     replaceItemInOrder,
     removeItemFromOrder,
-    requestPickupTime,
+    suggestedPickupTime,
     updateItemInOrder,
     validateRequestedItem,
 )
@@ -320,14 +320,15 @@ _GET_PREVIOUS_ORDERS_DETAILS_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
     },
     "additionalProperties": False,
 }
-_REQUEST_PICKUP_TIME_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
+_SUGGESTED_PICKUP_TIME_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "requested_time": {
-            "type": ["string", "null"],
-            "description": "Free-text pickup time from the customer, or null to read existing preference.",
+        "pickup_time_minutes": {
+            "type": "integer",
+            "description": "Customer's suggested pickup time converted to whole minutes from now.",
         }
     },
+    "required": ["pickup_time_minutes"],
     "additionalProperties": False,
 }
 
@@ -335,6 +336,7 @@ _REQUEST_PICKUP_TIME_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
 @dataclass(frozen=True, slots=True)
 class ExecutionToolRuntime:
     context: ExecutionAgentContext
+    is_order_confirmed: bool = False
 
 
 @dataclass(slots=True)
@@ -909,7 +911,8 @@ class ExecutionAgent:
                 merchant_id=context_object.merchant_id,
                 clover_creds=context_object.clover_creds,
                 clover_error=context_object.clover_error,
-            )
+            ),
+            is_order_confirmed=context_object.is_order_confirmed,
         )
         active_tools = self._build_tools(runtime, tracker=tracker)
 
@@ -1095,6 +1098,28 @@ class ExecutionAgent:
                 out_json = repr(result)
             print(f"[ExecutionAgent] tool={tool_name} INPUT:\n{in_json}")
             print(f"[ExecutionAgent] tool={tool_name} OUTPUT:\n{out_json}")
+
+        async def _order_confirmed_escalate(action: str) -> dict[str, Any]:
+            reason = f"Customer attempted '{action}' after order was already confirmed."
+            print(f"[ExecutionAgent] order_confirmed_guard triggered for action={action!r}")
+            result = await humanInterventionNeeded(
+                session_id=runtime.context.session_id,
+                reason=reason,
+                merchant_id=runtime.context.merchant_id or "",
+            )
+            result["agentInstruction"] = (
+                "The order is already confirmed and cannot be changed by the bot. "
+                "Tell the customer their order has been placed and that a team member "
+                "will be in touch to assist with any changes."
+            )
+            return result
+
+        def _guard(action: str, fn: Callable[..., Awaitable[dict[str, Any]]]) -> Callable[..., Awaitable[dict[str, Any]]]:
+            async def _wrapper(**kwargs: Any) -> dict[str, Any]:
+                if runtime.is_order_confirmed:
+                    return await _order_confirmed_escalate(action)
+                return await fn(**kwargs)
+            return _wrapper
 
         async def _validate_requested_item_tool(
             *,
@@ -1285,16 +1310,14 @@ class ExecutionAgent:
             _log_tool_call_io("getPreviousOrdersDetails", args, out)
             return out
 
-        async def _request_pickup_time_tool(
-            *,
-            requested_time: str | None = None,
-        ) -> dict[str, Any]:
-            args = {"requested_time": requested_time}
-            out = await requestPickupTime(
+        async def _suggested_pickup_time_tool(*, pickup_time_minutes: int) -> dict[str, Any]:
+            args = {"pickup_time_minutes": pickup_time_minutes}
+            out = await suggestedPickupTime(
                 session_id=runtime.context.session_id,
-                requested_time=requested_time,
+                pickup_time_minutes=pickup_time_minutes,
+                merchant_id=runtime.context.merchant_id or "",
             )
-            _log_tool_call_io("requestPickupTime", args, out)
+            _log_tool_call_io("suggestedPickupTime", args, out)
             return out
 
         tools_list = [
@@ -1313,31 +1336,31 @@ class ExecutionAgent:
                 name="addItemsToOrder",
                 description="Add one or more resolved menu items to the current order.",
                 parameters_json_schema=_ADD_ITEMS_TO_ORDER_PARAMETERS_JSON_SCHEMA,
-                handler=_add_items_to_order_tool,
+                handler=_guard("add_item", _add_items_to_order_tool),
             ),
             llm_client.GeminiFunctionTool(
                 name="replaceItemInOrder",
                 description="Replace one existing order item with another resolved menu item.",
                 parameters_json_schema=_REPLACE_ITEM_IN_ORDER_PARAMETERS_JSON_SCHEMA,
-                handler=_replace_item_in_order_tool,
+                handler=_guard("replace_item", _replace_item_in_order_tool),
             ),
             llm_client.GeminiFunctionTool(
                 name="removeItemFromOrder",
                 description="Remove an existing item from the current order.",
                 parameters_json_schema=_REMOVE_ITEM_FROM_ORDER_PARAMETERS_JSON_SCHEMA,
-                handler=_remove_item_from_order_tool,
+                handler=_guard("remove_item", _remove_item_from_order_tool),
             ),
             llm_client.GeminiFunctionTool(
                 name="changeItemQuantity",
                 description="Change the quantity of an item already in the current order.",
                 parameters_json_schema=_CHANGE_ITEM_QUANTITY_PARAMETERS_JSON_SCHEMA,
-                handler=_change_item_quantity_tool,
+                handler=_guard("change_item_quantity", _change_item_quantity_tool),
             ),
             llm_client.GeminiFunctionTool(
                 name="updateItemInOrder",
                 description="Update modifiers and notes for an existing line item in the current order.",
                 parameters_json_schema=_UPDATE_ITEM_IN_ORDER_PARAMETERS_JSON_SCHEMA,
-                handler=_update_item_in_order_tool,
+                handler=_guard("update_item", _update_item_in_order_tool),
             ),
             llm_client.GeminiFunctionTool(
                 name="calcOrderPrice",
@@ -1349,13 +1372,13 @@ class ExecutionAgent:
                 name="confirmOrder",
                 description="Submit the current order after explicit customer confirmation.",
                 parameters_json_schema=_NO_ARGUMENTS_JSON_SCHEMA,
-                handler=_confirm_order_tool,
+                handler=_guard("confirm_order", _confirm_order_tool),
             ),
             llm_client.GeminiFunctionTool(
                 name="cancelOrder",
                 description="Cancel the current order after explicit customer confirmation.",
                 parameters_json_schema=_NO_ARGUMENTS_JSON_SCHEMA,
-                handler=_cancel_order_tool,
+                handler=_guard("cancel_order", _cancel_order_tool),
             ),
             llm_client.GeminiFunctionTool(
                 name="getMenuLink",
