@@ -1,4 +1,4 @@
-from src.chatbot.gemini_client import generate_text
+from src.chatbot.llm_client import generate_text
 from src.chatbot.prompts import (
     CLARIFY_VAGUE_MESSAGE_SYSTEM_PROMPT,
     FAREWELL_SYSTEM_PROMPT,

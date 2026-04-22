@@ -5,7 +5,7 @@ from src.chatbot.constants import (
     SUMMARIZATION_THRESHOLD,
 )
 from src.chatbot.exceptions import AIServiceError
-from src.chatbot.gemini_client import generate_text
+from src.chatbot.llm_client import generate_text
 from src.chatbot.llm_messages import chat_history_from_messages
 from src.chatbot.schema import Message
 

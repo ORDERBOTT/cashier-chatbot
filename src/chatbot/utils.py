@@ -226,17 +226,64 @@ def _collect_modifier_ids_from_item(item_row: dict) -> set[str]:
 # Names matching this pattern are combo items (e.g. "Sandos & Fries") — skip entirely
 _COMBO_NAME_RE = re.compile(r'&')
 
+def _merge_numeric_name_variants(norm_name: str, items: list[dict]) -> list[dict]:
+    """Collapse numeric variants into one item with a synthetic 'Quantity' modifier group.
+
+    Splits the group into items that have a numeric token in their original name
+    and those that don't. If 2+ numeric variants exist, merges only those and
+    returns a single merged item (non-numeric placeholders are dropped from
+    by_name but remain accessible in by_id). Returns the original list unchanged
+    when fewer than 2 numeric variants are found.
+    """
+    if len(items) <= 1:
+        return items
+
+    numeric_items: list[dict] = []
+    quantity_options: list[dict] = []
+
+    for item in items:
+        orig = item.get("_original_name", "")
+        m = re.search(r'\b(\d+)\b', orig)
+        if m is not None:
+            numeric_items.append(item)
+            quantity_options.append({
+                "id": item["id"],
+                "name": m.group(1),
+                "price": item.get("price", 0) or 0,
+            })
+
+    if len(numeric_items) < 2:
+        return items  # not enough numeric variants — skip merging
+
+    quantity_options.sort(key=lambda x: int(x["name"]))
+
+    base = dict(numeric_items[0])
+    base["modifier_groups"] = list(base.get("modifier_groups") or []) + [{
+        "id": f"quantity__{norm_name}",
+        "name": "Quantity",
+        "min_required": 1,
+        "max_allowed": 1,
+        "modifiers": quantity_options,
+    }]
+    base["merged"] = True
+    base.pop("_original_name", None)
+    return [base]
+
+
 def _normalize_item_name(name: str) -> str | None:
     """Return a cleaned name for menu indexing, or None to skip the item.
 
     Rules applied in order:
     - Skip combo names that contain '&' (e.g. "Sandos & Fries", "Tenders & Fries").
+    - Skip items whose raw name is exactly "wings" (case-insensitive) — Clover placeholder with price 0.
     - Remove standalone numeric tokens (e.g. "5", "10").
     - Remove the standalone word "pc" (case-insensitive).
     - Collapse extra whitespace.
     Returns None when the result is empty or the item should be excluded.
     """
     if _COMBO_NAME_RE.search(name):
+        return None
+    if name.strip().lower() == "wings":
         return None
     cleaned = re.sub(r'\b\d+\b', '', name)
     cleaned = re.sub(r'\bpc\b', '', cleaned, flags=re.IGNORECASE)
@@ -268,6 +315,7 @@ async def _normalize_menu(raw: dict) -> dict:
         if normalized_name is None:
             continue
 
+        item["_original_name"] = item.get("name", "")
         item["name"] = normalized_name
         item_id = item["id"]
         by_id[item_id] = item
@@ -280,6 +328,15 @@ async def _normalize_menu(raw: dict) -> dict:
 
         for mod_id in _collect_modifier_ids_from_item(item):
             by_modifier_id[mod_id] = item_id
+
+    for norm_name_key in list(by_name.keys()):
+        if len(by_name[norm_name_key]) > 1:
+            by_name[norm_name_key] = _merge_numeric_name_variants(
+                norm_name_key, by_name[norm_name_key]
+            )
+
+    for item in by_id.values():
+        item.pop("_original_name", None)
 
     return {
         "by_id": by_id,

@@ -22,7 +22,7 @@ from src.chatbot.clarification.constants import (
 )
 from src.chatbot.clarification.fuzzy_matcher import _combined_scorer
 from src.chatbot.exceptions import AIServiceError
-from src.chatbot.gemini_client import generate_text
+from src.chatbot.llm_client import generate_text
 from src import firebase as _firebase
 from src.config import settings
 from src.menu.clover_client import (

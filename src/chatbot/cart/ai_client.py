@@ -1,7 +1,7 @@
 import json
 
 from src.chatbot.cart.utils import format_money_context_for_prompt
-from src.chatbot.gemini_client import generate_model, generate_text
+from src.chatbot.llm_client import generate_model, generate_text
 from src.chatbot.internal_schemas import (
     ClosestModifierResolution,
     ModifierAddonCheckResult,

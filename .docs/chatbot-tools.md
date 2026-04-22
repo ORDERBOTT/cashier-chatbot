@@ -40,3 +40,55 @@ Target resolution priority:
 - `details` falls back to remove-all when modifier scoring is below `NOT_FOUND_THRESHOLD`. This is intentional — if the qualifier is too vague, safer to remove all matching items and let the agent tell the customer.
 - Individual delete failures in the bulk-remove loop are logged but don't abort the whole operation. Only if `removedCount == 0` at the end is `success=False` returned.
 - `LOW_MENU_MATCH_THRESHOLD` (65) gates the initial item name match; `NOT_FOUND_THRESHOLD` (50) gates the modifier/details match.
+
+## 2026-04-22 - Menu Numeric Variant Merging
+
+### Overview
+Items like "Wings 6", "Wings 12", "Wings 24" all normalize to the same `by_name` key `"wings"`. Previously only the first variant was ever retrieved. Now they are merged into one item.
+
+### How It Works (`src/chatbot/utils.py`)
+- **`_merge_numeric_name_variants(norm_name, items)`** — new helper above `_normalize_item_name`. If every item in the group has a numeric token in its original name, collapses them into a single item with a synthetic `"Quantity"` required modifier group (one option per variant). Returns the list unchanged if any item lacks a number.
+- **`_normalize_menu`** — stores `item["_original_name"]` before overwriting `item["name"]`, then post-processes `by_name` to call `_merge_numeric_name_variants` for any key with >1 item, then strips `_original_name` from all `by_id` entries.
+- `by_id` is **unchanged** — each original variant (e.g. "Wings 6") still lives there by its real ID so `addItemsToOrder` can look it up.
+
+### Agent Flow
+1. `findClosestMenuItems("wings")` returns the merged item with `merged: True` and a `"Quantity"` modifier group.
+2. Agent prompts user to choose a quantity.
+3. User picks "12" → agent passes that modifier option's `id` (the original "Wings 12" item ID) as `itemId` to `addItemsToOrder`.
+
+### Gotchas
+- Non-numeric multi-variant items (e.g. two items that both normalize to the same name without numbers) are NOT merged — list stays as-is.
+- Quantity modifier `id` fields are the original item IDs, not synthetic IDs, so `addItemsToOrder` needs no changes.
+
+## 2026-04-22 - Skip "Wings" Placeholder Item
+
+### Overview
+Clover has a placeholder item with raw name exactly `"Wings"`, price 0, and no category. After normalization it collides with real bone-in wing items (e.g. "6 PC Wings" → `"wings"`). An explicit exclusion prevents it from ever entering the menu index.
+
+### Fix (`src/chatbot/utils.py` — `_normalize_item_name`)
+Added a check before the existing normalization logic:
+```python
+if name.strip().lower() == "wings":
+    return None
+```
+This returns `None` (skip) only when the raw name is **exactly** "wings" (any casing). It does not affect:
+- "Boneless Wings" → normalizes to `"boneless wings"` ✓
+- "6 PC Wings" / "10 PC Wings" → raw name is not exactly "wings" ✓
+
+## 2026-04-22 - Provider-Agnostic LLM Routing
+
+### Rule
+All LLM calls must go through `src/chatbot/llm_client.py`. Never import from `gemini_client` or `openai_client` directly in feature code.
+
+### How It Works
+- `src/config.py` sets `AI_MODE` (default `"chatgpt"`)
+- `llm_client.py` routes `generate_text` / `generate_model` to OpenAI or Gemini based on `AI_MODE`
+- Switching providers requires only changing `AI_MODE` in config — no code changes needed
+
+### Files Updated
+Swapped direct `gemini_client` imports to `llm_client` in:
+- `src/chatbot/visibility/ai_client.py`
+- `src/chatbot/infrastructure/summarizer.py`
+- `src/chatbot/tools.py`
+- `src/chatbot/clarification/ai_resolver.py`
+- `src/chatbot/cart/ai_client.py`

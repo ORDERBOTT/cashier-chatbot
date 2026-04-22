@@ -6,7 +6,7 @@ from src.chatbot.clarification.prompts import (
     MODIFIER_RESOLUTION_SYSTEM_PROMPT,
     NOT_FOUND_ITEM_RESOLUTION_SYSTEM_PROMPT,
 )
-from src.chatbot.gemini_client import generate_model, generate_text
+from src.chatbot.llm_client import generate_model, generate_text
 from src.chatbot.internal_schemas import ModifierResolutionResult
 from src.chatbot.llm_messages import chat_history_from_messages
 from src.chatbot.schema import Message

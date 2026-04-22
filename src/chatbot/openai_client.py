@@ -8,7 +8,7 @@ import openai
 from pydantic import BaseModel
 
 from src.chatbot.exceptions import AIServiceError
-from src.chatbot.gemini_client import GeminiFunctionTool, normalize_json_schema
+from src.chatbot.gemini_client import GeminiFunctionTool
 from src.chatbot.llm_messages import LLMMessage, split_system_instruction
 from src.config import settings
 
@@ -187,6 +187,31 @@ async def generate_text_with_tools(
     )
 
 
+def _make_openai_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Prepare a Pydantic JSON schema for OpenAI strict mode.
+
+    OpenAI strict mode requires:
+    1. additionalProperties: false on every object node
+    2. required must list every key present in properties (no optional fields)
+    """
+    import copy
+
+    schema = copy.deepcopy(schema)
+
+    def _process(node: Any) -> Any:
+        if isinstance(node, dict):
+            if node.get("type") == "object" or "properties" in node:
+                node["additionalProperties"] = False
+                if "properties" in node:
+                    node["required"] = list(node["properties"].keys())
+            return {k: _process(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [_process(i) for i in node]
+        return node
+
+    return _process(schema)
+
+
 async def generate_model(
     messages: Sequence[LLMMessage],
     response_model: type[_ModelT],
@@ -197,7 +222,7 @@ async def generate_model(
 ) -> _ModelT:
     resolved_model = model or settings.OPENAI_MODEL
     oai_messages = _build_messages(messages)
-    response_schema = normalize_json_schema(response_model.model_json_schema())
+    response_schema = _make_openai_strict_schema(response_model.model_json_schema())
     print(
         "[OpenAI] generate_model",
         f"response_model={getattr(response_model, '__name__', response_model)!r}",
@@ -269,7 +294,7 @@ async def generate_model_with_tools(
     resolved_model = model or settings.OPENAI_MODEL
     oai_messages = _build_messages(messages)
     tools_spec = _build_tools_spec(function_tools)
-    response_schema = normalize_json_schema(response_model.model_json_schema())
+    response_schema = _make_openai_strict_schema(response_model.model_json_schema())
     tool_handlers: dict[str, Callable[..., Awaitable[dict[str, Any]]]] = {
         t.name: t.handler for t in function_tools
     }
