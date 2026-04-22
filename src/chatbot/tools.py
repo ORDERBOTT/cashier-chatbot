@@ -3235,18 +3235,9 @@ async def getMenuLink(session_id: str, merchant_id: str, creds: dict | None = No
         - ``success`` True with ``menu_url`` → send the URL to the customer.
         - ``success`` False → inform customer that a menu link is not available.
     """
-    print(f"[getMenuLink] session_id={session_id!r} merchant_id={merchant_id!r}")
-    if creds is None:
-        print("[getMenuLink] no creds available")
-        return {"success": False, "menu_url": None, "error": "Credentials unavailable."}
-
-    menu_url = creds.get("menu_url") or None
-    if not menu_url:
-        print("[getMenuLink] no menu_url in creds")
-        return {"success": False, "menu_url": None, "error": "Menu link not configured."}
-
-    print(f"[getMenuLink] menu_url={menu_url!r}")
-    return {"success": True, "menu_url": str(menu_url), "error": None}
+    menu_url = "https://www.smashnwings.com/menu"
+    print(f"[getMenuLink] session_id={session_id!r} merchant_id={merchant_id!r} menu_url={menu_url!r}")
+    return {"success": True, "menu_url": menu_url, "error": None}
 
 
 async def getItemsNotAvailableToday(merchant_id: str, creds: dict | None = None) -> dict:
