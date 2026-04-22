@@ -674,6 +674,11 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
     2. Call askingForPickupTime() first.
     3. After it returns, call confirmOrder().
        After confirmOrder returns → respond to the customer confirming the order.
+       Always phrase the pickup estimate in MINUTES using the tool's
+       estimatedPickuptime value, e.g.
+       "Thanks for ordering! Your order is confirmed and will be ready for
+       pickup in {estimatedPickuptime} minutes."
+       Do NOT state a clock time (e.g. "at 17:37") — always use minutes.
 
     For CANCEL_ORDER:
     - Call cancelOrder() (only after confirmation word).

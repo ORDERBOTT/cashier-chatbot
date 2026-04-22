@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.chatbot import tools as tools_mod
+from src.chatbot.constants import _DEFAULT_PICKUP_MINUTES
 from src.chatbot.tools import confirmOrder
 
 _FAKE_SETTINGS = SimpleNamespace(
@@ -129,7 +130,7 @@ def test_confirm_order_success():
             {"lineItemId": "li-2", "name": "Regular Fries", "quantity": 2, "price": 700, "lineTotal": 700},
         ],
         "finalTotal": 1743,
-        "estimatedPickuptime": None,
+        "estimatedPickuptime": _DEFAULT_PICKUP_MINUTES,
         "error": None,
     }
 
@@ -191,7 +192,7 @@ def test_confirm_order_uses_calc_order_price_logic_for_modifier_backed_totals():
             {"lineItemId": "KCMJW2QQGHJK2", "name": "Chicken Sando", "quantity": 1, "price": 899, "lineTotal": 1249},
         ],
         "finalTotal": 1579,
-        "estimatedPickuptime": None,
+        "estimatedPickuptime": _DEFAULT_PICKUP_MINUTES,
         "error": None,
     }
 
