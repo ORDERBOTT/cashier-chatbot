@@ -1,6 +1,6 @@
 # Helper functions for chatbot
 from src.chatbot.constants import ConversationState, _MENU_AVAILABILITY_STALE_SECONDS, _HARDCODED_SALES_TAX_PERCENT
-from src.chatbot.constants import _MENU_CACHE_VERSION
+from src.chatbot.constants import _MENU_CACHE_VERSION, _MENU_CACHE_TTL_SECONDS
 from src.chatbot.promptsv2 import _SUMMARIZE_HISTORY_SYSTEM_PROMPT
 from src.cache import cache_get, cache_set
 import json
@@ -24,6 +24,10 @@ def _parse_conversation_state(value: str | None) -> ConversationState | None:
         return ConversationState(value.strip().lower())
     except ValueError:
         return None
+
+def _clover_creds_redis_key(merchant_id: str) -> str:
+    return f"clover_creds:{merchant_id}"
+
 
 def _menu_cache_key(merchant_id: str) -> str:
     return f"menu:v{_MENU_CACHE_VERSION}:{merchant_id}"
@@ -346,8 +350,8 @@ async def _normalize_menu(raw: dict) -> dict:
     }
 
 async def _persist_menu_items_cache(merchant_id: str, items_by_name: dict) -> None:
-    await cache_set(_menu_cache_key(merchant_id), json.dumps(items_by_name), ttl=300)
-    await cache_set(_menu_fetched_at_key(merchant_id), str(int(time.time())), ttl=300)
+    await cache_set(_menu_cache_key(merchant_id), json.dumps(items_by_name), ttl=_MENU_CACHE_TTL_SECONDS)
+    await cache_set(_menu_fetched_at_key(merchant_id), str(int(time.time())), ttl=_MENU_CACHE_TTL_SECONDS)
 
 
 async def _menu_cache_age_seconds(merchant_id: str) -> float | None:

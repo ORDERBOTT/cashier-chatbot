@@ -49,6 +49,7 @@ from src.chatbot.tools import (
     prepare_clover_data,
     replaceItemInOrder,
     removeItemFromOrder,
+    askingForPickupTime,
     suggestedPickupTime,
     updateItemInOrder,
     validateRequestedItem,
@@ -347,6 +348,8 @@ _SUGGESTED_PICKUP_TIME_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
     "required": ["pickup_time_minutes"],
     "additionalProperties": False,
 }
+
+_ASKING_FOR_PICKUP_TIME_PARAMETERS_JSON_SCHEMA = _NO_ARGUMENTS_JSON_SCHEMA
 
 
 @dataclass(frozen=True, slots=True)
@@ -1335,6 +1338,15 @@ class ExecutionAgent:
             _log_tool_call_io("suggestedPickupTime", args, out)
             return out
 
+        async def _asking_for_pickup_time_tool() -> dict[str, Any]:
+            args = {}
+            out = await askingForPickupTime(
+                session_id=runtime.context.session_id,
+                merchant_id=runtime.context.merchant_id or "",
+            )
+            _log_tool_call_io("askingForPickupTime", args, out)
+            return out
+
         tools_list = [
             llm_client.GeminiFunctionTool(
                 name="validateRequestedItem",
@@ -1434,6 +1446,18 @@ class ExecutionAgent:
                 ),
                 parameters_json_schema=_SUGGESTED_PICKUP_TIME_PARAMETERS_JSON_SCHEMA,
                 handler=_guard("suggested_pickup_time", _suggested_pickup_time_tool),
+            ),
+            llm_client.GeminiFunctionTool(
+                name="askingForPickupTime",
+                description=(
+                    "MUST be called in two situations: "
+                    "(1) when the customer asks about pickup time (e.g., 'how long will it take?', "
+                    "'when will my order be ready?', 'what's my wait time?'); "
+                    "(2) always alongside confirmOrder — call both tools for every order confirmation. "
+                    "Do NOT call this when the customer is suggesting a pickup time — use suggestedPickupTime for that."
+                ),
+                parameters_json_schema=_ASKING_FOR_PICKUP_TIME_PARAMETERS_JSON_SCHEMA,
+                handler=_guard("asking_for_pickup_time", _asking_for_pickup_time_tool),
             ),
         ]
         print(

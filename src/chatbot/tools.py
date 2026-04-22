@@ -41,13 +41,14 @@ from src.menu.clover_client import (
 )
 
 from src.chatbot.constants import (
+    _CLOVER_CREDS_REDIS_TTL_SECONDS,
     _COOKING_PREFERENCE_HINTS,
     _COOKING_MODIFIER_HINTS,
     _SESSION_CLOVER_ORDER_REDIS_TTL_SECONDS,
     _SUMMARIZE_HISTORY_MAX_OUTPUT_TOKENS,
 )
 
-from src.chatbot.utils import _menu_cache_key, _session_clover_order_redis_key, _session_status_redis_key, _session_order_state_redis_key, _session_messages_redis_key, _session_history_summary_cache_key, _normalize_session_history_message
+from src.chatbot.utils import _clover_creds_redis_key, _menu_cache_key, _session_clover_order_redis_key, _session_status_redis_key, _session_order_state_redis_key, _session_messages_redis_key, _session_history_summary_cache_key, _normalize_session_history_message
 from src.chatbot.utils import _summary_prompt_messages, _serialize_cached_history_summary, _parse_cached_history_summary
 from src.chatbot.utils import _normalize_menu, _persist_menu_items_cache, _menu_cache_age_seconds, _menu_snapshot_considered_fresh
 from src.chatbot.utils import _normalize_order_line_items, _line_item_quantity, _extract_line_item_modification_records
@@ -57,10 +58,39 @@ from src.chatbot.utils import _item_not_found_result, _availability_result, _des
 async def prepare_clover_data(db, settings, merchant_id: str) -> dict:
     """Fetch Clover credentials, refresh token if needed, and return an enriched creds dict.
 
-    Adds ``base_url`` and ``token`` keys to the Firestore creds dict so callers
-    can pass a single ``creds`` object everywhere.
+    Adds ``base_url`` and ``token`` keys to the creds dict so callers can pass a
+    single ``creds`` object everywhere.
+
+    Cache behaviour:
+    - On cache hit: loads creds from Redis, calls ensure_fresh_clover_access_token
+      with doc_ref=None (skips Firestore write), updates Redis only when the token
+      changed.
+    - On cache miss: fetches Firestore doc, calls ensure_fresh_clover_access_token
+      normally (writes refreshed token to Firestore), then stores the full creds
+      dict in Redis with a TTL of _CLOVER_CREDS_REDIS_TTL_SECONDS (3 hours).
     """
-    print(f"[prepare_clover_data] fetching doc for merchant_id={merchant_id!r}")
+    redis_key = _clover_creds_redis_key(merchant_id)
+
+    cached_raw = await cache_get(redis_key)
+    if cached_raw is not None:
+        print(f"[prepare_clover_data] cache hit merchant_id={merchant_id!r}")
+        creds = json.loads(cached_raw)
+        base_url = str(creds.get("api_base_url") or settings.CLOVER_API_BASE_URL).rstrip("/")
+        old_token = creds.get("access_token")
+        token = await ensure_fresh_clover_access_token(
+            creds,
+            base_url,
+            None,
+            app_client_id=settings.CLOVER_APP_ID,
+        )
+        creds["base_url"] = base_url
+        creds["token"] = token
+        if token != old_token:
+            print(f"[prepare_clover_data] token refreshed — updating Redis merchant_id={merchant_id!r}")
+            await cache_set(redis_key, json.dumps(creds), ttl=_CLOVER_CREDS_REDIS_TTL_SECONDS)
+        return creds
+
+    print(f"[prepare_clover_data] cache miss — fetching Firestore doc merchant_id={merchant_id!r}")
     snapshot = await _clover_integration_doc(db, merchant_id)
     creds = snapshot.to_dict() or {}
     print(
@@ -71,10 +101,7 @@ async def prepare_clover_data(db, settings, merchant_id: str) -> dict:
         f"has_client_id={bool(creds.get('client_id'))} "
         f"CLOVER_APP_ID_set={bool(settings.CLOVER_APP_ID)}"
     )
-
-    base_url = str(creds.get("api_base_url") or settings.CLOVER_API_BASE_URL).rstrip(
-        "/"
-    )
+    base_url = str(creds.get("api_base_url") or settings.CLOVER_API_BASE_URL).rstrip("/")
     print(f"[prepare_clover_data] base_url={base_url!r}")
     token = await ensure_fresh_clover_access_token(
         creds,
@@ -83,9 +110,10 @@ async def prepare_clover_data(db, settings, merchant_id: str) -> dict:
         app_client_id=settings.CLOVER_APP_ID,
     )
     print(f"[prepare_clover_data] token_acquired=True merchant_id={creds.get('merchant_id')!r}")
-
     creds["base_url"] = base_url
     creds["token"] = token
+    await cache_set(redis_key, json.dumps(creds), ttl=_CLOVER_CREDS_REDIS_TTL_SECONDS)
+    print(f"[prepare_clover_data] creds cached in Redis merchant_id={merchant_id!r}")
     return creds
 
 async def _clover_integration_doc(db, user_id: str):
@@ -3296,7 +3324,6 @@ async def humanInterventionNeeded(session_id: str, escalation_type: str, merchan
         escalation_type: Category of escalation. Must be one of:
             "order_cancellation" — customer wants to cancel their order.
             "made_changes_to_order" — customer made or requested changes after confirmation.
-            "asking_for_pickup_time" — customer is asking about pickup time.
             "questions_about_their_order" — customer has questions about their order.
         merchant_id: The merchant identifier associated with this session.
 
@@ -3387,6 +3414,51 @@ async def suggestedPickupTime(session_id: str, pickup_time_minutes: int, merchan
     except Exception as exc:
         print(f"[suggestedPickupTime] failed: {exc!r}")
         return {"success": False, "pickup_time_minutes": pickup_time_minutes, "timestamp": timestamp, "error": str(exc)}
+
+
+async def askingForPickupTime(session_id: str, merchant_id: str) -> dict:
+    """Notify the restaurant that the customer is asking about or wants to know their pickup time.
+
+    Call this in two situations:
+      1. When the customer asks about pickup time (e.g., "how long will my order take?",
+         "when will it be ready?", "what's my wait time?").
+      2. Always alongside confirmOrder — every order confirmation should trigger this ping.
+
+    Do NOT call this when the customer is SUGGESTING a pickup time (e.g., "I'll be there in
+    30 minutes") — use suggestedPickupTime for that case.
+
+    Args:
+        session_id: The chat session identifier.
+        merchant_id: The merchant identifier associated with this session.
+
+    Returns a dict:
+        success (bool)
+            True when the webhook returned a 2xx response.
+        error (str | None)
+            Human-readable reason for failure, or None on success.
+
+    Decision guide for the agent:
+        - success True  → no action needed; proceed normally.
+        - success False → no action needed; proceed normally (silent best-effort ping).
+    """
+    print(f"[askingForPickupTime] session_id={session_id!r} merchant_id={merchant_id!r}")
+    payload = {"order_id": session_id, "user_id": merchant_id}
+
+    if not settings.ESCALATION_URL:
+        print("[askingForPickupTime] ESCALATION_URL not configured")
+        return {"success": False, "error": "ESCALATION_URL is not configured"}
+
+    ping_url = settings.ESCALATION_URL + "/api/ping-for-pickup"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(ping_url, json=payload)
+            response.raise_for_status()
+        print(f"[askingForPickupTime] webhook sent status={response.status_code}")
+        return {"success": True, "error": None}
+    except Exception as exc:
+        print(f"[askingForPickupTime] failed: {exc!r}")
+        return {"success": False, "error": str(exc)}
 
 
 async def getPreviousOrdersDetails(session_id: str, limit: int = 3) -> dict:

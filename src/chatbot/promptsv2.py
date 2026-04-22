@@ -621,8 +621,9 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
 
     For CONFIRM_ORDER:
     1. Call calcOrderPrice() → get total.
-    2. Call confirmOrder().
-       After it returns → respond to the customer confirming the order.
+    2. Call askingForPickupTime() first.
+    3. After it returns, call confirmOrder().
+       After confirmOrder returns → respond to the customer confirming the order.
 
     For CANCEL_ORDER:
     - Call cancelOrder() (only after confirmation word).
@@ -660,14 +661,17 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
     For questions about past orders:
     - Call getPreviousOrdersDetails(limit) → fetch order history.
 
+    For PICKUPTIME_QUESTION (customer asks about pickup time, e.g. "when will my order be ready?", "how long is the wait?"):
+    - Call askingForPickupTime() — no arguments needed.
+    - After the tool returns, tell the customer the cashier has been notified and will confirm the pickup time.
+      Do NOT promise a specific time.
+
     For PICKUPTIME_QUESTION (customer suggests a pickup time, e.g. "I'll be there in 30 minutes"):
     - Call suggestedPickupTime(pickup_time_minutes=<int>) — convert the customer's phrase to whole
       minutes before calling (e.g. "an hour" → 60, "30 minutes" → 30).
     - After the tool returns:
-        success=True  → reply with something like: "Got it! The cashier has been notified of your
-                        suggested pickup time."
-        success=False → reply with something like: "I wasn't able to notify the cashier, but I've
-                        noted your preferred time."
+        success=True  → reply: "Got it! The cashier has been notified of your suggested pickup time."
+        success=False → reply: "I wasn't able to notify the cashier, but I've noted your preferred time."
     - NEVER state the pickup time back to the customer as confirmed or guaranteed.
       Do NOT say things like "your order will be ready in 30 minutes" or "we'll have it ready by then".
       The suggested time is not verified — only the cashier can confirm it.
