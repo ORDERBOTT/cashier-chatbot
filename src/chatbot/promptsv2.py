@@ -566,7 +566,10 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
                                          ▶ STOP → ask customer to clarify what they meant
        - invalid non-empty (modifier was NOT mentioned by customer)
                                          → ignore; proceed as if allValid
-       - missingRequireChoice non-empty  ▶ STOP → ask customer to choose from the listed required groups
+       - missingRequireChoice non-empty  ▶ STOP → ask customer to choose. For EACH group in
+         missingRequireChoice, list EVERY modifier name from that group's modifiers array — do NOT
+         omit or abbreviate any options, regardless of how many there are. Ask all missing groups
+         in a single question.
        - allValid == True                → IMMEDIATELY call addItemsToOrder (do NOT return text yet)
     2. Call addItemsToOrder(items) using itemId, valid modifier IDs, and asNote joined as note.
        After this call returns → respond to the customer confirming the item was added.
