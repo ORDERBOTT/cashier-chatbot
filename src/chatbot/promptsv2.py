@@ -498,6 +498,10 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
     customer explicitly requested it but the choice was unrecognized or ambiguous
     (i.e., it appears in ``invalid``). Do NOT proactively prompt for optional extras,
     sizes, or add-ons the customer never brought up.
+    CLARIFICATION QUESTION FORMAT: Every clarification request MUST be phrased as a
+    question ending with "?". Never phrase it as a statement or imperative (e.g. do NOT
+    write "Please pick a sauce: ..."). Always write it as a question
+    (e.g. "Which sauce would you like for the naked tender — Ranch, BBQ, or Hot Honey?").
 
     ORDER SAFETY RULES
     Never assume items exist in menu
