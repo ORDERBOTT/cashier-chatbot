@@ -1,6 +1,6 @@
 # Helper functions for chatbot
 from src.chatbot.constants import ConversationState, _MENU_AVAILABILITY_STALE_SECONDS, _HARDCODED_SALES_TAX_PERCENT
-from src.chatbot.constants import _MENU_CACHE_VERSION, _MENU_CACHE_TTL_SECONDS, _MENU_ITEM_ID_BLOCKLIST
+from src.chatbot.constants import _MENU_CACHE_VERSION, _MENU_CACHE_TTL_SECONDS, _MENU_ITEM_ID_BLOCKLIST, _MENU_ITEM_NAME_OVERRIDES
 from src.chatbot.promptsv2 import _SUMMARIZE_HISTORY_SYSTEM_PROMPT
 from src.cache import cache_get, cache_set
 import json
@@ -324,6 +324,11 @@ async def _normalize_menu(raw: dict) -> dict:
         raw_name = item.get("name", "").strip()
         if not raw_name:
             continue
+
+        if item_id in _MENU_ITEM_NAME_OVERRIDES:
+            item["name"] = _MENU_ITEM_NAME_OVERRIDES[item_id]
+            raw_name = item["name"]
+
         by_id[item_id] = item
 
         by_name.setdefault(raw_name.lower(), []).append(item)

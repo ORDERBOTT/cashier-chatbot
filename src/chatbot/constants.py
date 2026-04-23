@@ -73,3 +73,11 @@ _DEFAULT_PICKUP_MINUTES: int = 30
 _MENU_ITEM_ID_BLOCKLIST: frozenset[str] = frozenset({
     "KYNK3BZB1798J",  # "Wings" — Clover placeholder, real wing items are the sized variants
 })
+
+# Clover item IDs whose display name in Clover is wrong or has an accidental
+# quantity prefix (e.g. "1 Tender"). Maps item_id → corrected name used
+# everywhere in the system (by_name key, order submission, display).
+_MENU_ITEM_NAME_OVERRIDES: dict[str, str] = {
+    "E9GZ5CT761C24": "Tender",
+    "CAYKD5B3BHD70": "Chicken Sando",
+}
