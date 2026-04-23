@@ -93,6 +93,24 @@ DEFAULT_PARSING_AGENT_PROMPTS = ParsingAgentPrompts(
           "12 pc boneless wings"         → name="12 pc boneless wings", quantity=1
           "2 orders of 12 pc wings"      → name="12 pc wings", quantity=2
           "12 boneless wings"            → name="boneless wings", quantity=12  (no "pc" → quantity)
+        ITEM NAME vs DETAILS — CONNECTOR SPLIT RULES
+        The following English patterns reliably mark where the item name ends and
+        modifiers/additions begin. Apply them in order:
+          "X with Y"           → name=X, details=Y
+          "X on a/the Y bun"   → name=X, details="Y bun"
+          "X, no Y"            → name=X, details="no Y"
+          "X hold Y"           → name=X, details="no Y"
+          "X extra Y"          → name=X, details="extra Y"
+          "X light Y"          → name=X, details="light Y"
+          "make that/it a Y"   → do NOT change name; add Y to details of the last item
+          "add Y to my X"      → name=X, details=Y
+        Words like "combo", "meal", "platter", "basket", "order of", "side of" are
+        packaging terms, NOT part of the item name. Strip them from name entirely
+        unless that word is the only thing the customer said.
+        INTRA-MESSAGE REFERENCE RESOLUTION
+        If a sentence within the same message uses "that", "it", or "the same" as a pronoun for an 
+        item mentioned earlier in the same message, do NOT create a new Data entry. 
+        Append that sentence's details to the existing entry for the referenced item.
         WHEN TO USE LOW CONFIDENCE
         - Ambiguous intent
         - Unclear item
@@ -122,10 +140,13 @@ DEFAULT_PARSING_AGENT_PROMPTS = ParsingAgentPrompts(
         6. If the message is purely answering unfulfilled entries (no new order action), Data may
            be empty [].
         NO THANKS / NOTHING ELSE → CONFIRM_ORDER
-        If the customer's message is a direct response to "Do you want to add anything else?"
-        and the customer declines (e.g., "No", "Nope", "That's it", "I'm good", "Nothing else",
-        "No thanks", "All good", "That's all"), classify the intent as confirm_order with high
-        confidence. Do NOT mark it as outside_agent_scope or greeting.
+        Only apply this rule when unfulfilled_queue is EMPTY. If unfulfilled_queue is non-empty,
+        the customer is responding to a clarification question — output Data: [] instead.
+        If unfulfilled_queue IS empty and the customer's message is a direct response to
+        "Do you want to add anything else?" and the customer declines (e.g., "No", "Nope",
+        "That's it", "I'm good", "Nothing else", "No thanks", "All good", "That's all"),
+        classify the intent as confirm_order with high confidence.
+        Do NOT mark it as outside_agent_scope or greeting.
         """
     ).strip(),
     few_shot_examples_prompt=dedent(
@@ -597,6 +618,10 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
     For ADD_ITEM:
     1. Call validateRequestedItem(itemName, details). Then check the result:
        - matchConfidence "none"          ▶ STOP → tell customer item not found
+       - matchConfidence "category_match" ▶ STOP → tell the customer you have several options
+         in the "{matched_category}" category, list ALL items from candidates (name + price),
+         and ask which one they want.
+         When they reply, re-call validateRequestedItem with just that item name as itemName.
        - matchConfidence "wing_type_ambiguous" ▶ STOP → list ALL entries from wing_types and ask
          which type of wings the customer wants.
          (e.g. "Which type of wings would you like — Boneless Wings or Tenders?")
@@ -616,7 +641,24 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
          When they answer, match their reply to the closest entry in size_options (use that exact
          label, not the customer's raw wording) and re-call validateRequestedItem with the
          full reconstructed name (size_options entry + " " + size_family_base) as itemName.
-       - matchConfidence "close"         ▶ STOP → ask customer to confirm which item they meant
+       - matchConfidence "close"         ▶ STOP. Check qa_pairs to determine which clarification
+         step you are on for this item:
+
+         Step 1 — No prior clarification attempt for this item appears in qa_pairs
+           → Ask: "Just to confirm, did you mean [candidates[0].name]?"
+           → Do NOT call any mutation tool.
+
+         Step 2 — qa_pairs shows the most recent bot message was a single-item
+           "did you mean [X]?" question AND the customer's latest reply is a rejection
+           ("no", "nope", "not that", "that's not it", etc.)
+           → List ALL items from candidates[] by name and ask:
+             "Sorry about that! Did you mean any of the following?" followed by
+             every candidate name on its own line.
+           → Do NOT call any mutation tool.
+
+         Step 3 — qa_pairs shows the most recent bot message listed multiple candidates
+           AND the customer's latest reply is still a rejection
+           → Call humanInterventionNeeded immediately. Do not ask again.
        - available == False              ▶ STOP → tell customer item is unavailable
        - invalid non-empty (modifier was customer-requested but unresolved)
                                          ▶ STOP → ask customer to clarify what they meant

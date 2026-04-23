@@ -460,6 +460,18 @@ class Orchestrator:
                 f"intent={item.intent.value!r}",
             )
 
+        # When the customer replied but parsing found no new intents (e.g. "no", "nope"),
+        # their message is a response to a pending clarification. Promote those entries
+        # back to "pending" so the execution agent can react to the reply this turn.
+        if not parsed_data and unfulfilled:
+            for entry in queue:
+                if entry.get("status") == "need_clarification":
+                    entry["status"] = "pending"
+                    print(
+                        "[Orchestrator] promoted need_clarification → pending",
+                        f"entry_id={entry.get('entry_id')!r}",
+                    )
+
         session_status = await cache_get(_session_status_redis_key(request.session_id))
         is_order_confirmed = session_status == "confirmed"
         prepared_context = self.prepare_agent_context(

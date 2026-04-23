@@ -340,6 +340,23 @@ def _find_closest_menu_items_from_menu(
 
     if not top_matches or top_matches[0][1] < LOW_MENU_MATCH_THRESHOLD:
         best_score = top_matches[0][1] if top_matches else None
+        # Category fallback: try matching against category names before giving up
+        items_by_category = menu_items.get("by_category", {})
+        if items_by_category:
+            best_cat = process.extractOne(item_name, set(items_by_category), scorer=_combined_scorer)
+            if best_cat and best_cat[1] >= LOW_MENU_MATCH_THRESHOLD:
+                matched_cat = best_cat[0]
+                category_items = items_by_category[matched_cat]
+                print(
+                    "[findClosestMenuItems] return category_match "
+                    f"category={matched_cat!r} item_count={len(category_items)} score={best_cat[1]!r}"
+                )
+                return {
+                    "exact_match": None,
+                    "candidates": category_items,
+                    "match_confidence": "category_match",
+                    "matched_category": matched_cat,
+                }
         print(
             "[findClosestMenuItems] return none "
             f"reason={'no_top_matches' if not top_matches else 'below_threshold'} "
@@ -1214,11 +1231,18 @@ async def validateRequestedItem(
             Top 2-3 fuzzy matches. Populated for ``"exact"`` and ``"close"``;
             empty list for ``"none"``.
 
-        matchConfidence ("exact" | "close" | "none")
-            ``"exact"``  — item found verbatim; proceed with exactMatch.
-            ``"close"``  — ambiguous; ask the customer to confirm which item
-                           they meant before adding.
-            ``"none"``   — item not on the menu; tell the customer it is unavailable.
+        matchConfidence ("exact" | "close" | "none" | "category_match" | "size_variant" | "wing_type_ambiguous")
+            ``"exact"``              — item found verbatim; proceed with exactMatch.
+            ``"close"``              — ambiguous; ask the customer to confirm which item
+                                       they meant before adding.
+            ``"none"``               — item not on the menu; tell the customer it is unavailable.
+            ``"category_match"``     — phrase matched a category name (e.g. "wings" → "Wings").
+                                       Extra field: ``matched_category`` (str) — category display name.
+                                       ``candidates`` contains all items in that category.
+            ``"size_variant"``       — phrase matched a size family without a size specified.
+                                       Extra fields: ``size_family_base`` (str), ``size_options`` (list[str]).
+            ``"wing_type_ambiguous"`` — phrase matched multiple wing-type families.
+                                       Extra field: ``wing_types`` (list[str]).
 
         itemId (str | None)
             Clover item UUID; populated only when matchConfidence is ``"exact"``.
@@ -1267,6 +1291,15 @@ async def validateRequestedItem(
         matchConfidence == "none"
             Item not on the menu. Tell the customer the item is unavailable
             and suggest browsing the menu. All downstream fields are ``None``.
+
+        matchConfidence == "category_match"
+            The customer's phrase matched a menu category name (e.g. "wings",
+            "burgers") but not a specific item. Extra field ``matched_category``
+            (str) holds the display name of the matched category.
+            ``candidates`` contains every item in that category.
+            Do NOT call any mutation tools. List ALL candidates (name + price)
+            and ask which one the customer wants. When they reply, re-call
+            validateRequestedItem with just the chosen item name.
 
         matchConfidence == "close"
             Ambiguous match. Show ``candidates[0]`` (and optionally
@@ -1379,7 +1412,13 @@ async def validateRequestedItem(
                 "[validateRequestedItem] return early "
                 f"matchConfidence={match_confidence!r}"
             )
-            return {**base, **_null_downstream}
+            # Forward any extra fields from match_result (wing_types, size_options,
+            # size_family_base, matched_category) so the agent can read them directly.
+            extra_fields = {
+                k: v for k, v in match_result.items()
+                if k not in ("exact_match", "candidates", "match_confidence")
+            }
+            return {**base, **_null_downstream, **extra_fields}
 
         # --- exact match branch ---
         item_id = str(exact_match.get("id", "")).strip()
