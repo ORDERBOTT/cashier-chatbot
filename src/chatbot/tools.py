@@ -3518,7 +3518,7 @@ async def humanInterventionNeeded(session_id: str, escalation_type: str, merchan
         return {"success": False, "escalated": False, "error": str(exc)}
 
 
-async def suggestedPickupTime(session_id: str, pickup_time_minutes: int, merchant_id: str) -> dict:
+async def suggestedPickupTime(session_id: str, pickup_time_minutes: int, firebase_uid: str) -> dict:
     """Notify the external system that the customer has suggested a pickup time.
 
     Call this ONLY when the customer explicitly states a pickup time (e.g.,
@@ -3532,7 +3532,8 @@ async def suggestedPickupTime(session_id: str, pickup_time_minutes: int, merchan
             as a whole number of minutes from now (e.g., 30 for "in 30 minutes",
             60 for "in an hour"). Convert the customer's natural-language phrase
             to minutes before passing — do NOT pass a raw string.
-        merchant_id: The merchant identifier associated with this session.
+        firebase_uid: The Firebase UID (original_merchant_id) for this merchant.
+            This is sent as user_id in the webhook payload. Do NOT pass the Clover merchant ID.
 
     Returns a dict:
         success (bool)
@@ -3550,13 +3551,13 @@ async def suggestedPickupTime(session_id: str, pickup_time_minutes: int, merchan
         - ``success`` False → still acknowledge the time to the customer but
           note internally that the notification could not be sent.
     """
-    print(f"[suggestedPickupTime] session_id={session_id!r} pickup_time_minutes={pickup_time_minutes!r} merchant_id={merchant_id!r}")
+    print(f"[suggestedPickupTime] session_id={session_id!r} pickup_time_minutes={pickup_time_minutes!r} firebase_uid={firebase_uid!r}")
     timestamp = datetime.now(timezone.utc).isoformat()
     payload = {
         "order_id": session_id,
         "pickup_time_suggestion": pickup_time_minutes,
         "pickup_time_suggestion_timestamp": timestamp,
-        "user_id": merchant_id,
+        "user_id": firebase_uid,
     }
 
     pickup_url = settings.ESCALATION_URL + "/api/suggested-pickup-time"
@@ -3575,7 +3576,7 @@ async def suggestedPickupTime(session_id: str, pickup_time_minutes: int, merchan
         return {"success": False, "pickup_time_minutes": pickup_time_minutes, "timestamp": timestamp, "error": str(exc)}
 
 
-async def askingForPickupTime(session_id: str, merchant_id: str) -> dict:
+async def askingForPickupTime(session_id: str, firebase_uid: str) -> dict:
     """Notify the restaurant that the customer is asking about or wants to know their pickup time.
 
     Call this in two situations:
@@ -3588,7 +3589,8 @@ async def askingForPickupTime(session_id: str, merchant_id: str) -> dict:
 
     Args:
         session_id: The chat session identifier.
-        merchant_id: The merchant identifier associated with this session.
+        firebase_uid: The Firebase UID (original_merchant_id) for this merchant.
+            This is sent as user_id in the webhook payload. Do NOT pass the Clover merchant ID.
 
     Returns a dict:
         success (bool)
@@ -3600,8 +3602,8 @@ async def askingForPickupTime(session_id: str, merchant_id: str) -> dict:
         - success True  → no action needed; proceed normally.
         - success False → no action needed; proceed normally (silent best-effort ping).
     """
-    print(f"[askingForPickupTime] session_id={session_id!r} merchant_id={merchant_id!r}")
-    payload = {"order_id": session_id, "user_id": merchant_id}
+    print(f"[askingForPickupTime] session_id={session_id!r} firebase_uid={firebase_uid!r}")
+    payload = {"order_id": session_id, "user_id": firebase_uid}
 
     if not settings.ESCALATION_URL:
         print("[askingForPickupTime] ESCALATION_URL not configured")

@@ -1328,7 +1328,7 @@ class ExecutionAgent:
             out = await suggestedPickupTime(
                 session_id=runtime.context.session_id,
                 pickup_time_minutes=pickup_time_minutes,
-                merchant_id=runtime.context.original_merchant_id or "",
+                firebase_uid=runtime.context.original_merchant_id or "",
             )
             _log_tool_call_io("suggestedPickupTime", args, out)
             return out
@@ -1337,7 +1337,7 @@ class ExecutionAgent:
             args = {}
             out = await askingForPickupTime(
                 session_id=runtime.context.session_id,
-                merchant_id=runtime.context.original_merchant_id or "",
+                firebase_uid=runtime.context.original_merchant_id or "",
             )
             _log_tool_call_io("askingForPickupTime", args, out)
             return out
