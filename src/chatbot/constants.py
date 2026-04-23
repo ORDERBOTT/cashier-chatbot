@@ -80,4 +80,5 @@ _MENU_ITEM_ID_BLOCKLIST: frozenset[str] = frozenset({
 _MENU_ITEM_NAME_OVERRIDES: dict[str, str] = {
     "E9GZ5CT761C24": "Tender",
     "CAYKD5B3BHD70": "Chicken Sando",
+    "Y23V3Y50YC2A4": "6 Pc Boneless Wings"
 }
