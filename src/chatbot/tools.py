@@ -1458,12 +1458,47 @@ async def validateRequestedItem(
 
         if not details:
             missing_require_choice = _required_modifier_groups(item_row, set())
+
+            # Auto-resolve: words in itemName beyond the matched menu name may be
+            # modifier hints (e.g. "spicy chicken sando" → "spicy" hints at Heat Level).
+            # Try to match each leftover word against missing required group modifiers.
+            matched_name_words = set(str(item_row.get("name", "")).strip().lower().split())
+            leftover_words = [w for w in itemName.lower().split() if w not in matched_name_words]
+            auto_valid: list[dict] = []
+            auto_selected_keys: set[tuple[str, str]] = set()
+
+            if leftover_words and missing_require_choice:
+                missing_group_ids = {g["id"] for g in missing_require_choice}
+                candidate_options = [opt for opt in flattened_options if opt["groupId"] in missing_group_ids]
+                for word in leftover_words:
+                    match = _match_requested_modifier(word, candidate_options)
+                    if match is not None:
+                        selection_key = (match["groupId"], match["modifierId"])
+                        if selection_key not in auto_selected_keys:
+                            auto_selected_keys.add(selection_key)
+                            auto_valid.append({
+                                "requested": word,
+                                "modifierId": match["modifierId"],
+                                "name": match["name"],
+                                "price": match["price"],
+                                "groupId": match["groupId"],
+                                "groupName": match["groupName"],
+                            })
+                            print(
+                                "[validateRequestedItem] auto_resolved_from_name "
+                                f"word={word!r} modifier={match['name']!r} "
+                                f"group={match['groupName']!r}"
+                            )
+
+            if auto_selected_keys:
+                missing_require_choice = _required_modifier_groups(item_row, auto_selected_keys)
+
             result = {
                 **base,
                 "itemId": item_id,
                 "merchantId": merchant_id,
                 "available": True,
-                "valid": [],
+                "valid": auto_valid,
                 "invalid": [],
                 "asNote": [],
                 "missingRequireChoice": missing_require_choice,
