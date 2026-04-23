@@ -85,6 +85,10 @@ def _session_order_state_redis_key(session_id: str) -> str:
     return f"orderstate:{session_id}"
 
 
+def _session_order_data_redis_key(session_id: str) -> str:
+    return f"order:data:{session_id}"
+
+
 def _session_messages_redis_key(session_id: str) -> str:
     return f"message:{session_id}"
 

@@ -92,3 +92,26 @@ Swapped direct `gemini_client` imports to `llm_client` in:
 - `src/chatbot/tools.py`
 - `src/chatbot/clarification/ai_resolver.py`
 - `src/chatbot/cart/ai_client.py`
+
+## 2026-04-23 - Redis Cache for Clover Order Data
+
+### Overview
+Introduced a read-through Redis cache for full Clover order responses to eliminate redundant Clover API calls within a single user turn.
+
+### Key Changes
+- `src/chatbot/constants.py` — added `_SESSION_ORDER_DATA_REDIS_TTL_SECONDS = 3 * 60 * 60`
+- `src/chatbot/utils.py` — added `_session_order_data_redis_key(session_id)` → `order:data:{session_id}`
+- `src/chatbot/tools.py` — added two private helpers:
+  - `_get_order_data(session_id, creds, *, force_refresh=False)` — read-through cache; calls `get_order_id_for_session` + `fetch_clover_order` on miss, stores result in Redis
+  - `_invalidate_order_data_cache(session_id)` — deletes the cache key
+- `src/chatbot/router.py` — `clear_session` now also deletes `order:data:{session_id}`
+
+### Which tools use it
+- **Read-only** (`getOrderLineItems`, `calcOrderPrice`): call `_get_order_data(session_id, creds)` — uses cache on hit
+- **Mutation tools** (`addItemsToOrder`, `replaceItemInOrder`, `removeItemFromOrder`, `changeItemQuantity`, `updateItemInOrder`): pre-reads use cache; post-mutation fetch uses `force_refresh=True` to re-populate cache with fresh data
+- **`cancelOrder`**: calls `_invalidate_order_data_cache` alongside existing order-state and order-id deletes
+
+### Gotchas
+- `calcOrderPrice` previously used `expand=["lineItems", "lineItems.modifications", "discounts"]`; now uses the standard cached response. Pricing breakdown still works since `_pricing_breakdown_from_order` uses the Clover `total` and line item prices which are always present in the default response.
+- `_get_order_data` forward-references `get_order_id_for_session` (defined later in the same file at ~line 3400). This is fine in Python since both are module-level functions resolved at call time.
+- `confirmOrder`'s `fetch_clover_order` calls were intentionally left unchanged — confirmation is a mutation that needs authoritative data and doesn't benefit from caching.

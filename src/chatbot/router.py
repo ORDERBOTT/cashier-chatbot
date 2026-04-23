@@ -18,6 +18,7 @@ from src.chatbot.utils import (
     _buffer_timer_redis_key,
     _session_clover_order_redis_key,
     _session_messages_redis_key,
+    _session_order_data_redis_key,
     _session_order_state_redis_key,
     _session_status_redis_key,
     _session_clarification_and_intent_redis_key,
@@ -49,6 +50,7 @@ async def bot_message_v2(request: ChatbotV2MessageRequest) -> ChatbotV2MessageRe
 async def clear_session(body: ClearSessionRequest) -> dict:
     session_id = body.session_id
     await cache_delete(_session_clover_order_redis_key(session_id))
+    await cache_delete(_session_order_data_redis_key(session_id))
     await cache_delete(_session_messages_redis_key(session_id))
     await cache_delete(_session_order_state_redis_key(session_id))
     await cache_delete(_session_status_redis_key(session_id))

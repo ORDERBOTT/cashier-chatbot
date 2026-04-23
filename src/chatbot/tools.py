@@ -47,14 +47,40 @@ from src.chatbot.constants import (
     _COOKING_MODIFIER_HINTS,
     _DEFAULT_PICKUP_MINUTES,
     _SESSION_CLOVER_ORDER_REDIS_TTL_SECONDS,
+    _SESSION_ORDER_DATA_REDIS_TTL_SECONDS,
     _SUMMARIZE_HISTORY_MAX_OUTPUT_TOKENS,
 )
 
-from src.chatbot.utils import _clover_creds_redis_key, _menu_cache_key, _session_clover_order_redis_key, _session_status_redis_key, _session_order_state_redis_key, _session_messages_redis_key, _session_history_summary_cache_key, _normalize_session_history_message
+from src.chatbot.utils import _clover_creds_redis_key, _menu_cache_key, _session_clover_order_redis_key, _session_status_redis_key, _session_order_state_redis_key, _session_order_data_redis_key, _session_messages_redis_key, _session_history_summary_cache_key, _normalize_session_history_message
 from src.chatbot.utils import _summary_prompt_messages, _serialize_cached_history_summary, _parse_cached_history_summary
 from src.chatbot.utils import _normalize_menu, _persist_menu_items_cache, _menu_cache_age_seconds, _menu_snapshot_considered_fresh
 from src.chatbot.utils import _normalize_order_line_items, _line_item_quantity, _extract_line_item_modification_records
 from src.chatbot.utils import _item_not_found_result, _availability_result, _describe_update_changes, _pricing_breakdown_from_order 
+
+
+async def _get_order_data(session_id: str, creds: dict, *, force_refresh: bool = False) -> dict:
+    """Return cached Clover order data, fetching fresh when missing or force_refresh=True.
+
+    Stores the full fetch_clover_order response as JSON in Redis under
+    _session_order_data_redis_key(session_id). Pass force_refresh=True after
+    any mutation to bypass the cache and re-populate it.
+    """
+    key = _session_order_data_redis_key(session_id)
+    if not force_refresh:
+        cached = await cache_get(key)
+        if cached:
+            print(f"[_get_order_data] cache hit for session_id={session_id!r}")
+            return json.loads(cached)
+    order_id = await get_order_id_for_session(session_id, creds)
+    order_data = await fetch_clover_order(
+        creds["token"], creds["merchant_id"], creds["base_url"], order_id
+    )
+    await cache_set(key, json.dumps(order_data), ttl=_SESSION_ORDER_DATA_REDIS_TTL_SECONDS)
+    return order_data
+
+
+async def _invalidate_order_data_cache(session_id: str) -> None:
+    await cache_delete(_session_order_data_redis_key(session_id))
 
 
 async def prepare_clover_data(db, settings, merchant_id: str) -> dict:
@@ -1708,13 +1734,11 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
 
     updated_total = 0
     try:
-        order_data = await fetch_clover_order(
-            creds["token"], creds["merchant_id"], creds["base_url"], order_id
-        )
+        order_data = await _get_order_data(session_id, creds, force_refresh=True)
         updated_total = order_data.get("total", 0) or 0
         print(f"[addItemsToOrder] updated order total: {updated_total} cents")
     except Exception as exc:
-        print(f"[addItemsToOrder] fetch_clover_order failed: {exc!r}")
+        print(f"[addItemsToOrder] fetch order data failed: {exc!r}")
 
     result = {
         "success": len(failed_items) == 0,
@@ -1808,9 +1832,7 @@ async def replaceItemInOrder(
     print(f"[replaceItemInOrder] order_id={order_id!r}")
 
     # Fetch current order to resolve target
-    order_data = await fetch_clover_order(
-        creds["token"], creds["merchant_id"], creds["base_url"], order_id
-    )
+    order_data = await _get_order_data(session_id, creds)
     print(
         f"[replaceItemInOrder] raw order_data keys: {list(order_data.keys())}, lineItems type: {type(order_data.get('lineItems'))!r}"
     )
@@ -2035,13 +2057,11 @@ async def replaceItemInOrder(
     # --- Fetch updated total ---
     updated_total = 0
     try:
-        updated_order = await fetch_clover_order(
-            creds["token"], creds["merchant_id"], creds["base_url"], order_id
-        )
+        updated_order = await _get_order_data(session_id, creds, force_refresh=True)
         updated_total = updated_order.get("total", 0) or 0
         print(f"[replaceItemInOrder] updated order total: {updated_total} cents")
     except Exception as exc:
-        print(f"[replaceItemInOrder] fetch_clover_order failed: {exc!r}")
+        print(f"[replaceItemInOrder] fetch order data failed: {exc!r}")
 
     result = {
         "success": True,
@@ -2134,9 +2154,7 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
     order_id = await get_order_id_for_session(session_id, creds)
     print(f"[removeItemFromOrder] order_id={order_id!r}")
 
-    order_data = await fetch_clover_order(
-        creds["token"], creds["merchant_id"], creds["base_url"], order_id
-    )
+    order_data = await _get_order_data(session_id, creds)
     print(
         f"[removeItemFromOrder] raw order_data keys: {list(order_data.keys())}, lineItems type: {type(order_data.get('lineItems'))!r}"
     )
@@ -2198,13 +2216,11 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
         # --- Fetch updated total (non-fatal) ---
         updated_total = 0
         try:
-            updated_order = await fetch_clover_order(
-                creds["token"], creds["merchant_id"], creds["base_url"], order_id
-            )
+            updated_order = await _get_order_data(session_id, creds, force_refresh=True)
             updated_total = updated_order.get("total", 0) or 0
             print(f"[removeItemFromOrder] updated order total: {updated_total} cents")
         except Exception as exc:
-            print(f"[removeItemFromOrder] fetch_clover_order failed: {exc!r}")
+            print(f"[removeItemFromOrder] fetch order data failed: {exc!r}")
 
         result = {
             "success": True,
@@ -2297,13 +2313,11 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
         # --- Fetch updated total (non-fatal) ---
         updated_total = 0
         try:
-            updated_order = await fetch_clover_order(
-                creds["token"], creds["merchant_id"], creds["base_url"], order_id
-            )
+            updated_order = await _get_order_data(session_id, creds, force_refresh=True)
             updated_total = updated_order.get("total", 0) or 0
             print(f"[removeItemFromOrder] updated order total: {updated_total} cents")
         except Exception as exc:
-            print(f"[removeItemFromOrder] fetch_clover_order failed: {exc!r}")
+            print(f"[removeItemFromOrder] fetch order data failed: {exc!r}")
 
         result = {
             "success": True,
@@ -2378,9 +2392,7 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
     order_id = await get_order_id_for_session(session_id, creds)
     print(f"[changeItemQuantity] order_id={order_id!r}")
 
-    order_data = await fetch_clover_order(
-        creds["token"], creds["merchant_id"], creds["base_url"], order_id
-    )
+    order_data = await _get_order_data(session_id, creds)
     print(
         f"[changeItemQuantity] raw order_data keys: {list(order_data.keys())}, lineItems type: {type(order_data.get('lineItems'))!r}"
     )
@@ -2542,13 +2554,11 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
 
     updated_total = 0
     try:
-        updated_order = await fetch_clover_order(
-            creds["token"], creds["merchant_id"], creds["base_url"], order_id
-        )
+        updated_order = await _get_order_data(session_id, creds, force_refresh=True)
         updated_total = updated_order.get("total", 0) or 0
         print(f"[changeItemQuantity] updated order total: {updated_total} cents")
     except Exception as exc:
-        print(f"[changeItemQuantity] fetch_clover_order failed: {exc!r}")
+        print(f"[changeItemQuantity] fetch order data failed: {exc!r}")
 
     result = {
         "success": True,
@@ -2653,9 +2663,7 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds:
     order_id = await get_order_id_for_session(session_id, creds)
     print(f"[updateItemInOrder] order_id={order_id!r}")
 
-    order_data = await fetch_clover_order(
-        creds["token"], creds["merchant_id"], creds["base_url"], order_id
-    )
+    order_data = await _get_order_data(session_id, creds)
     print(
         f"[updateItemInOrder] raw order_data keys: {list(order_data.keys())}, lineItems type: {type(order_data.get('lineItems'))!r}"
     )
@@ -2853,13 +2861,11 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds:
 
     updated_total = 0
     try:
-        updated_order = await fetch_clover_order(
-            creds["token"], creds["merchant_id"], creds["base_url"], order_id
-        )
+        updated_order = await _get_order_data(session_id, creds, force_refresh=True)
         updated_total = updated_order.get("total", 0) or 0
         print(f"[updateItemInOrder] updated order total: {updated_total} cents")
     except Exception as exc:
-        print(f"[updateItemInOrder] fetch_clover_order failed: {exc!r}")
+        print(f"[updateItemInOrder] fetch order data failed: {exc!r}")
 
     result = {
         "success": True,
@@ -2930,28 +2936,7 @@ async def calcOrderPrice(session_id: str, creds: dict | None = None) -> dict:
             raise ValueError("creds must be provided")
         print(f"[calcOrderPrice] order_id={order_id!r}")
 
-        try:
-            order_data = await fetch_clover_order(
-                creds["token"],
-                creds["merchant_id"],
-                creds["base_url"],
-                order_id,
-                expand=["lineItems", "lineItems.modifications", "discounts"],
-            )
-        except httpx.HTTPStatusError as exc:
-            status_code = exc.response.status_code if exc.response is not None else None
-            if status_code != 403:
-                raise
-            print(
-                "[calcOrderPrice] discounts expansion forbidden; retrying without expand=discounts"
-            )
-            order_data = await fetch_clover_order(
-                creds["token"],
-                creds["merchant_id"],
-                creds["base_url"],
-                order_id,
-                expand=["lineItems", "lineItems.modifications"],
-            )
+        order_data = await _get_order_data(session_id, creds)
         print(f"[calcOrderPrice] raw order_data keys: {list(order_data.keys())}")
 
         breakdown = _pricing_breakdown_from_order(order_data)
@@ -3131,6 +3116,7 @@ async def cancelOrder(session_id: str, creds: dict | None = None) -> dict:
 
         await cache_delete(_session_order_state_redis_key(session_id))
         await cache_delete(_session_clover_order_redis_key(session_id))
+        await _invalidate_order_data_cache(session_id)
         await cache_set(_session_status_redis_key(session_id), "cancelled")
 
         result = {
@@ -3187,12 +3173,9 @@ async def getOrderLineItems(session_id: str, creds: dict | None = None) -> dict:
     try:
         if creds is None:
             raise ValueError("creds must be provided")
-        order_id = await get_order_id_for_session(session_id, creds)
+        order_data = await _get_order_data(session_id, creds)
+        order_id = order_data.get("id", "")
         print(f"[getOrderLineItems] order_id={order_id!r}")
-
-        order_data = await fetch_clover_order(
-            creds["token"], creds["merchant_id"], creds["base_url"], order_id
-        )
         print(f"[getOrderLineItems] raw order_data keys: {list(order_data.keys())}")
 
         raw_list = _normalize_order_line_items(order_data)
