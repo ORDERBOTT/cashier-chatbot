@@ -61,3 +61,7 @@ _BUFFER_RESULT_TTL_SECONDS: int = 60
 _BUFFER_POLL_INTERVAL_SECONDS: float = 0.1
 _BUFFER_POLL_TIMEOUT_SECONDS: float = 45.0
 _BUFFER_MAX_WAIT_SECONDS: float = 10.0
+
+# Default pickup window (minutes) reported to the customer when an order is
+# confirmed and no specific pickup time has been requested.
+_DEFAULT_PICKUP_MINUTES: int = 30

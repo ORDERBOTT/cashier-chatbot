@@ -45,6 +45,7 @@ from src.chatbot.constants import (
     _CLOVER_CREDS_REDIS_TTL_SECONDS,
     _COOKING_PREFERENCE_HINTS,
     _COOKING_MODIFIER_HINTS,
+    _DEFAULT_PICKUP_MINUTES,
     _SESSION_CLOVER_ORDER_REDIS_TTL_SECONDS,
     _SUMMARIZE_HISTORY_MAX_OUTPUT_TOKENS,
 )
@@ -3002,8 +3003,10 @@ async def confirmOrder(session_id: str, creds: dict | None = None) -> dict:
             "success": True,
             "orderId": order_id,
             "confirmedItems": confirmed_items,
-            "finalTotal": breakdown["total"],
-            "estimatedPickuptime": None,
+            # Minutes until the order is ready for pickup. Populated so the
+            # agent can phrase the confirmation as "pickup in X minutes"
+            # instead of a hallucinated clock time.
+            "estimatedPickuptime": _DEFAULT_PICKUP_MINUTES,
             "error": None,
         }
         print(f"[confirmOrder] result={result}")
