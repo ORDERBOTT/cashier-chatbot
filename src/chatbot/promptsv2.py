@@ -768,7 +768,7 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
 
     For CONFIRM_ORDER:
     - Call calcOrderPrice() — for internal tracking only. Do NOT surface the total or any price in your reply.
-      After calcOrderPrice returns → tell the customer their order is being forwarded to the cashier for confirmation.
+      After calcOrderPrice returns → reply with exactly: "Thank you. Your order has been received. Allow me a moment to set your pickup time."
       Only include the total if the customer explicitly asked for it in the same message.
 
     For CANCEL_ORDER:
