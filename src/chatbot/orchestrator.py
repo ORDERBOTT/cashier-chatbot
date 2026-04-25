@@ -169,6 +169,19 @@ _VALIDATE_REQUESTED_ITEM_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
             "type": ["string", "null"],
             "description": "Raw modifier or qualifier string from the customer (e.g. 'lemon pepper, extra crispy'). Pass None when absent. Do not pre-split.",
         },
+        "include_candidate_details": {
+            "type": "boolean",
+            "description": (
+                "Only relevant when matchConfidence is 'exact'. "
+                "When false (default), candidates is returned empty on an exact match — "
+                "this prevents other items' modifier groups from bleeding into the result. "
+                "Has no effect for any other matchConfidence value: candidates are always "
+                "returned in full for 'close', 'category_match', 'wing_type_ambiguous', "
+                "'size_variant', and 'none'. "
+                "Pass true only if you have a specific reason to inspect alternative items "
+                "after an exact match is confirmed — almost all flows should omit this."
+            ),
+        },
     },
     "required": ["itemName"],
     "additionalProperties": False,
@@ -484,16 +497,25 @@ class Orchestrator:
             is_order_confirmed=is_order_confirmed,
         )
 
+        _INFORMATIONAL_INTENTS = {
+            "order_question",
+            "menu_question",
+            "restaurant_question",
+            "pickuptime_question",
+        }
+
         # Execute all pending entries in order
         replies: list[str] = []
         entries_processed = 0
         all_succeeded = True
         order_confirmed_this_turn = False
+        processed_intents: set[str] = set()
 
         for entry in queue:
             if entry.get("status") != "pending":
                 continue
             entries_processed += 1
+            processed_intents.add(entry.get("parsed_item", {}).get("Intent", ""))
             result = await self.execution_agent.run_single(
                 entry=entry,
                 context_object=prepared_context,
@@ -517,7 +539,7 @@ class Orchestrator:
                     )
                     entry["status"] = "done"
                     escalated = True
-                    replies.append("I'm having trouble processing that item — a team member will follow up with you shortly.")
+                    replies.append("I am having trouble processing that item. A team member will follow up with you shortly.")
                     print(
                         "[Orchestrator] escalated after max clarification attempts",
                         f"entry_id={entry.get('entry_id')!r}",
@@ -533,10 +555,12 @@ class Orchestrator:
                 f"clarification_q_count={len(result.clarification_questions)}",
             )
 
+        only_informational_queued = bool(processed_intents) and processed_intents.issubset(_INFORMATIONAL_INTENTS)
+
         queue = [e for e in queue if e.get("status") != "done"]
         await save_intent_queue(request.session_id, queue)
 
-        final_reply = "\n".join(r.strip() for r in replies if r.strip()) or "Got it!"
+        final_reply = "\n".join(r.strip() for r in replies if r.strip()) or "Understood."
 
         # Update ordering stage
         if order_confirmed_this_turn:
@@ -547,8 +571,8 @@ class Orchestrator:
             # Customer changed their mind and added items instead of confirming
             await set_ordering_stage(request.session_id, "ordering")
             print("[Orchestrator] customer changed mind, stage → ordering")
-        elif entries_processed > 0 and not queue and all_succeeded and not only_greetings_queued:
-            final_reply += "\nWould you like to add anything else?"
+        elif entries_processed > 0 and not queue and all_succeeded and not only_greetings_queued and not only_informational_queued:
+            final_reply += "\nIs there anything else you would like to add?"
             await set_ordering_stage(request.session_id, "awaiting_anything_else")
             print("[Orchestrator] all done, stage → awaiting_anything_else")
 
@@ -578,14 +602,7 @@ class Orchestrator:
         for item in line_items:
             name = item.get("name", "")
             qty = item.get("quantity", 1)
-            line_total = item.get("lineTotal", 0)
-            lines.append(f"{qty}x {name} — ${line_total / 100:.2f}")
-        subtotal = result.get("subtotal", 0)
-        tax = result.get("tax", 0)
-        total = result.get("total", 0)
-        lines.append(f"\nSubtotal: ${subtotal / 100:.2f}")
-        lines.append(f"Tax: ${tax / 100:.2f}")
-        lines.append(f"Total: ${total / 100:.2f}")
+            lines.append(f"{qty}x {name}")
         return "\n".join(lines)
 
     async def _build_parsing_context(
@@ -1163,8 +1180,9 @@ class ExecutionAgent:
             *,
             itemName: str,
             details: str | None = None,
+            include_candidate_details: bool = False,
         ) -> dict[str, Any]:
-            args: dict[str, Any] = {"itemName": itemName, "details": details}
+            args: dict[str, Any] = {"itemName": itemName, "details": details, "include_candidate_details": include_candidate_details}
             if runtime.context.clover_creds is None:
                 err = runtime.context.clover_error or "Clover credentials unavailable."
                 out: dict[str, Any] = {
@@ -1189,6 +1207,7 @@ class ExecutionAgent:
             out = await validateRequestedItem(
                 itemName=itemName,
                 details=details,
+                include_candidate_details=include_candidate_details,
                 merchant_id=runtime.context.merchant_id,
                 creds=runtime.context.clover_creds,
             )
