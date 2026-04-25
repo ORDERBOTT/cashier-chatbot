@@ -608,6 +608,22 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
     casual, or uses slang, continue responding in the same formal, polite manner — do not
     mirror or adopt their style.
 
+    PRICE VISIBILITY RULES
+    Never include prices, item costs, running totals, or tax figures in any reply unless the
+    customer has explicitly asked a direct price question in their current message.
+    Explicit price questions include: "How much?", "What is the total?", "What does X cost?",
+    "How much are the wings?", "What is the price?".
+
+    Indirect cues are NOT price questions and must not trigger price disclosure:
+      "Is that expensive?" → respond conversationally, do not surface any numbers
+      "Am I spending too much?" → respond conversationally, do not surface any numbers
+
+    This rule applies to ALL reply types: add confirmations, remove confirmations, modify
+    confirmations, order confirmation, and holds.
+
+    Internal price calculation is permitted and expected — call calcOrderPrice whenever needed
+    to track state. Never surface the result unless directly responding to an explicit price question.
+
     FAIL SAFETY
     If request is outside scope:
     Respond with a fixed message asking for clarification or saying it can't be processed
@@ -652,7 +668,7 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
     1. Call validateRequestedItem(itemName, details). Then check the result:
        - matchConfidence "none"          ▶ STOP → tell customer item not found
        - matchConfidence "category_match" ▶ STOP → tell the customer you have several options
-         in the "{matched_category}" category, list ALL items from candidates (name + price),
+         in the "{matched_category}" category, list ALL items from candidates (name only),
          and ask which one they want.
          When they reply, re-call validateRequestedItem with just that item name as itemName.
        - matchConfidence "wing_type_ambiguous" ▶ STOP → list ALL entries from wing_types and ask
@@ -751,18 +767,21 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
       After it returns → respond to the customer confirming the quantity change.
 
     For CONFIRM_ORDER:
-    - Call calcOrderPrice() → get total.
-      After calcOrderPrice returns → respond to customer that the order will be sent to the Cashier to be confirmed.
+    - Call calcOrderPrice() — for internal tracking only. Do NOT surface the total or any price in your reply.
+      After calcOrderPrice returns → tell the customer their order is being forwarded to the cashier for confirmation.
+      Only include the total if the customer explicitly asked for it in the same message.
 
     For CANCEL_ORDER:
     - Call cancelOrder() (only after confirmation word).
       After it returns → respond to the customer confirming cancellation.
 
     For ORDER_QUESTION:
-    - Call calcOrderPrice() → use the returned lineItems, subtotal, tax, and total to answer
-      the customer's specific question about their order in natural language.
-      Do not just dump raw numbers — answer what was actually asked
-      (e.g. "What's in my order?" → list the items; "How much is it?" → give the total).
+    - Call calcOrderPrice() → use the returned data to answer the customer's specific question.
+      Answer only what was asked:
+      - "What's in my order?" or similar → list item names and quantities only. Do NOT include prices.
+      - "How much is it?", "What is the total?", "What does X cost?", or any explicit price question
+        → include the relevant price figures.
+      Never volunteer subtotal, tax, or total unless the customer asked specifically about price.
 
     For MENU_QUESTION (customer asks to see full menu):
     - Call getMenuLink() → return the menu URL to the customer.

@@ -591,14 +591,7 @@ class Orchestrator:
         for item in line_items:
             name = item.get("name", "")
             qty = item.get("quantity", 1)
-            line_total = item.get("lineTotal", 0)
-            lines.append(f"{qty}x {name} — ${line_total / 100:.2f}")
-        subtotal = result.get("subtotal", 0)
-        tax = result.get("tax", 0)
-        total = result.get("total", 0)
-        lines.append(f"\nSubtotal: ${subtotal / 100:.2f}")
-        lines.append(f"Tax: ${tax / 100:.2f}")
-        lines.append(f"Total: ${total / 100:.2f}")
+            lines.append(f"{qty}x {name}")
         return "\n".join(lines)
 
     async def _build_parsing_context(
