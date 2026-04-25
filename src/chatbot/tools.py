@@ -1456,105 +1456,76 @@ async def validateRequestedItem(
             f"count={len(flattened_options)}"
         )
 
-        if not details:
-            missing_require_choice = _required_modifier_groups(item_row, set())
-
-            # Auto-resolve: words in itemName beyond the matched menu name may be
-            # modifier hints (e.g. "spicy chicken sando" → "spicy" hints at Heat Level).
-            # Try to match each leftover word against missing required group modifiers.
-            matched_name_words = set(str(item_row.get("name", "")).strip().lower().split())
-            leftover_words = [w for w in itemName.lower().split() if w not in matched_name_words]
-            auto_valid: list[dict] = []
-            auto_selected_keys: set[tuple[str, str]] = set()
-
-            if leftover_words and missing_require_choice:
-                missing_group_ids = {g["id"] for g in missing_require_choice}
-                candidate_options = [opt for opt in flattened_options if opt["groupId"] in missing_group_ids]
-                for word in leftover_words:
-                    match = _match_requested_modifier(word, candidate_options)
-                    if match is not None:
-                        selection_key = (match["groupId"], match["modifierId"])
-                        if selection_key not in auto_selected_keys:
-                            auto_selected_keys.add(selection_key)
-                            auto_valid.append({
-                                "requested": word,
-                                "modifierId": match["modifierId"],
-                                "name": match["name"],
-                                "price": match["price"],
-                                "groupId": match["groupId"],
-                                "groupName": match["groupName"],
-                            })
-                            print(
-                                "[validateRequestedItem] auto_resolved_from_name "
-                                f"word={word!r} modifier={match['name']!r} "
-                                f"group={match['groupName']!r}"
-                            )
-
-            if auto_selected_keys:
-                missing_require_choice = _required_modifier_groups(item_row, auto_selected_keys)
-
-            result = {
-                **base,
-                "itemId": item_id,
-                "merchantId": merchant_id,
-                "available": True,
-                "valid": auto_valid,
-                "invalid": [],
-                "asNote": [],
-                "missingRequireChoice": missing_require_choice,
-                "allValid": len(missing_require_choice) == 0,
-                "isModifierOrAddon": None,
-                "classification": None,
-                "closestModifier": None,
-            }
-            print(f"[validateRequestedItem] return no_details result={result!r}")
-            return result
-
-        resolution = await resolve_modifiers_for_item(
-            details=details,
-            item_name=str(item_row.get("name", "")).strip(),
-            available_options=flattened_options,
-        )
+        # Compute leftover words first — words in itemName that are not part of the
+        # matched menu item name and may carry modifier intent (e.g. "spicy" in
+        # "spicy chicken sando"). Done before any resolution so both sources can be
+        # merged into a single resolver call.
+        matched_name_words = set(str(item_row.get("name", "")).strip().lower().split())
+        leftover_words = [w for w in itemName.lower().split() if w not in matched_name_words]
         print(
-            "[validateRequestedItem] ai_resolution "
-            f"resolved_count={len(resolution.resolved)} "
-            f"as_note={resolution.as_note!r} "
-            f"unresolvable={resolution.unresolvable!r}"
+            "[validateRequestedItem] leftover_words "
+            f"leftover={leftover_words!r}"
         )
 
-        option_by_id = {opt["modifierId"]: opt for opt in flattened_options}
-        valid: list[dict] = []
-        as_note: list[str] = list(resolution.as_note)
-        truly_invalid: list[str] = list(resolution.unresolvable)
-        selected_keys: set[tuple[str, str]] = set()
+        # Build unified details: explicit details + leftover words → one resolver pass.
+        parts: list[str] = []
+        if details:
+            parts.append(details)
+        if leftover_words:
+            parts.append(", ".join(leftover_words))
+        unified_details = ", ".join(parts) if parts else None
 
-        for item in resolution.resolved:
-            opt = option_by_id.get(item.modifierId)
-            if opt is None:
-                print(
-                    "[validateRequestedItem] ai_resolved_id_not_found "
-                    f"modifierId={item.modifierId!r} name={item.name!r}"
-                )
-                truly_invalid.append(item.name)
-                continue
-            selection_key = (opt["groupId"], opt["modifierId"])
-            if selection_key in selected_keys:
-                print(
-                    "[validateRequestedItem] ai_resolved_duplicate "
-                    f"selection_key={selection_key!r}"
-                )
-                continue
-            selected_keys.add(selection_key)
-            valid.append(
-                {
-                    "requested": item.name,
-                    "modifierId": opt["modifierId"],
-                    "name": opt["name"],
-                    "price": opt["price"],
-                    "groupId": opt["groupId"],
-                    "groupName": opt["groupName"],
-                }
+        if unified_details:
+            resolution = await resolve_modifiers_for_item(
+                details=unified_details,
+                item_name=str(item_row.get("name", "")).strip(),
+                available_options=flattened_options,
             )
+            print(
+                "[validateRequestedItem] ai_resolution "
+                f"resolved_count={len(resolution.resolved)} "
+                f"as_note={resolution.as_note!r} "
+                f"unresolvable={resolution.unresolvable!r}"
+            )
+
+            option_by_id = {opt["modifierId"]: opt for opt in flattened_options}
+            valid: list[dict] = []
+            as_note: list[str] = list(resolution.as_note)
+            truly_invalid: list[str] = list(resolution.unresolvable)
+            selected_keys: set[tuple[str, str]] = set()
+
+            for resolved_item in resolution.resolved:
+                opt = option_by_id.get(resolved_item.modifierId)
+                if opt is None:
+                    print(
+                        "[validateRequestedItem] ai_resolved_id_not_found "
+                        f"modifierId={resolved_item.modifierId!r} name={resolved_item.name!r}"
+                    )
+                    truly_invalid.append(resolved_item.name)
+                    continue
+                selection_key = (opt["groupId"], opt["modifierId"])
+                if selection_key in selected_keys:
+                    print(
+                        "[validateRequestedItem] ai_resolved_duplicate "
+                        f"selection_key={selection_key!r}"
+                    )
+                    continue
+                selected_keys.add(selection_key)
+                valid.append(
+                    {
+                        "requested": resolved_item.name,
+                        "modifierId": opt["modifierId"],
+                        "name": opt["name"],
+                        "price": opt["price"],
+                        "groupId": opt["groupId"],
+                        "groupName": opt["groupName"],
+                    }
+                )
+        else:
+            valid = []
+            as_note = []
+            truly_invalid = []
+            selected_keys = set()
 
         missing_require_choice = _required_modifier_groups(item_row, selected_keys)
         all_valid = not truly_invalid and not missing_require_choice

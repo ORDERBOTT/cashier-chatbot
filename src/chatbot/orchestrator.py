@@ -517,7 +517,7 @@ class Orchestrator:
                     )
                     entry["status"] = "done"
                     escalated = True
-                    replies.append("I'm having trouble processing that item — a team member will follow up with you shortly.")
+                    replies.append("I am having trouble processing that item. A team member will follow up with you shortly.")
                     print(
                         "[Orchestrator] escalated after max clarification attempts",
                         f"entry_id={entry.get('entry_id')!r}",
@@ -536,7 +536,7 @@ class Orchestrator:
         queue = [e for e in queue if e.get("status") != "done"]
         await save_intent_queue(request.session_id, queue)
 
-        final_reply = "\n".join(r.strip() for r in replies if r.strip()) or "Got it!"
+        final_reply = "\n".join(r.strip() for r in replies if r.strip()) or "Understood."
 
         # Update ordering stage
         if order_confirmed_this_turn:
@@ -548,7 +548,7 @@ class Orchestrator:
             await set_ordering_stage(request.session_id, "ordering")
             print("[Orchestrator] customer changed mind, stage → ordering")
         elif entries_processed > 0 and not queue and all_succeeded and not only_greetings_queued:
-            final_reply += "\nWould you like to add anything else?"
+            final_reply += "\nIs there anything else you would like to add?"
             await set_ordering_stage(request.session_id, "awaiting_anything_else")
             print("[Orchestrator] all done, stage → awaiting_anything_else")
 
