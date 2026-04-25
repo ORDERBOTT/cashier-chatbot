@@ -635,6 +635,19 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
     those filler phrases into ``details``; leave it empty so validation does not treat
     them as unrecognized modifiers.
 
+    validateRequestedItem — include_candidate_details flag:
+    This flag only affects the response when matchConfidence is "exact". For all other
+    matchConfidence values ("close", "category_match", "wing_type_ambiguous",
+    "size_variant", "none"), candidates are always returned in full regardless of the flag.
+    When false (default) and matchConfidence is "exact", candidates is returned empty.
+    This is the correct default for all normal exact-match flows: on an exact match,
+    derive all modifier information exclusively from exactMatch.modifier_groups.
+    The candidates array contains other menu items the customer did not order —
+    their modifier groups do not belong to the matched item and must never be used
+    to infer available options, combos, sizes, or add-ons.
+    Omit the flag (accept the default) in virtually all cases. Pass true only if you
+    have a specific reason to inspect alternative items after an exact match.
+
     For ADD_ITEM:
     1. Call validateRequestedItem(itemName, details). Then check the result:
        - matchConfidence "none"          ▶ STOP → tell customer item not found

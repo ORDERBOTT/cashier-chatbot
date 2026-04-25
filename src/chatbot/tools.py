@@ -1198,6 +1198,7 @@ async def checkIfModifierOrAddOn(
 async def validateRequestedItem(
     itemName: str,
     details: str | None = None,
+    include_candidate_details: bool = False,
     merchant_id: str | None = None,  # noqa: ARG001 — reserved for future multi-tenant routing
     creds: dict | None = None,
 ) -> dict:
@@ -1220,6 +1221,20 @@ async def validateRequestedItem(
             (e.g. "lemon pepper, extra crispy").
             Pass ``None`` when absent. The string is split on commas and
             semicolons internally; do NOT pre-split.
+        include_candidate_details:
+            Controls whether the ``candidates`` array is populated when
+            ``matchConfidence == "exact"``. Has NO effect for any other
+            matchConfidence value — candidates are always returned in full
+            for ``"close"``, ``"category_match"``, ``"wing_type_ambiguous"``,
+            ``"size_variant"``, and ``"none"`` so the agent can present
+            alternatives to the customer.
+            When ``False`` (default) and matchConfidence is ``"exact"``,
+            ``candidates`` is returned as an empty list. This is the safe
+            default: on an exact match the agent should only read
+            ``exactMatch.modifier_groups`` and never need candidate data.
+            Pass ``True`` only if you have a specific reason to inspect
+            alternative items after an exact match is already confirmed
+            (rare — almost all flows should leave this at the default).
 
     Returns a dict with the following fields (all always present; ``None`` when
     the step was skipped because an earlier step returned a non-exact result):
@@ -1228,8 +1243,9 @@ async def validateRequestedItem(
             Full menu item row when matchConfidence is ``"exact"``; else ``None``.
 
         candidates (list[dict])
-            Top 2-3 fuzzy matches. Populated for ``"exact"`` and ``"close"``;
-            empty list for ``"none"``.
+            Top 2-3 fuzzy matches. Always populated in full for non-exact
+            matchConfidence values. For ``"exact"``, populated only when
+            ``include_candidate_details=True``; otherwise an empty list.
 
         matchConfidence ("exact" | "close" | "none" | "category_match" | "size_variant" | "wing_type_ambiguous")
             ``"exact"``              — item found verbatim; proceed with exactMatch.
@@ -1353,7 +1369,8 @@ async def validateRequestedItem(
     """
     print(
         "[validateRequestedItem] start "
-        f"itemName={itemName!r} details={details!r}"
+        f"itemName={itemName!r} details={details!r} "
+        f"include_candidate_details={include_candidate_details!r}"
     )
 
     _null_downstream: dict = {
@@ -1421,6 +1438,9 @@ async def validateRequestedItem(
             return {**base, **_null_downstream, **extra_fields}
 
         # --- exact match branch ---
+        if not include_candidate_details:
+            base["candidates"] = []
+
         item_id = str(exact_match.get("id", "")).strip()
         merchant_id = str(creds.get("merchant_id", "")).strip()
         by_id = menu_items.get("by_id", {})

@@ -169,6 +169,19 @@ _VALIDATE_REQUESTED_ITEM_PARAMETERS_JSON_SCHEMA: dict[str, Any] = {
             "type": ["string", "null"],
             "description": "Raw modifier or qualifier string from the customer (e.g. 'lemon pepper, extra crispy'). Pass None when absent. Do not pre-split.",
         },
+        "include_candidate_details": {
+            "type": "boolean",
+            "description": (
+                "Only relevant when matchConfidence is 'exact'. "
+                "When false (default), candidates is returned empty on an exact match — "
+                "this prevents other items' modifier groups from bleeding into the result. "
+                "Has no effect for any other matchConfidence value: candidates are always "
+                "returned in full for 'close', 'category_match', 'wing_type_ambiguous', "
+                "'size_variant', and 'none'. "
+                "Pass true only if you have a specific reason to inspect alternative items "
+                "after an exact match is confirmed — almost all flows should omit this."
+            ),
+        },
     },
     "required": ["itemName"],
     "additionalProperties": False,
@@ -1163,8 +1176,9 @@ class ExecutionAgent:
             *,
             itemName: str,
             details: str | None = None,
+            include_candidate_details: bool = False,
         ) -> dict[str, Any]:
-            args: dict[str, Any] = {"itemName": itemName, "details": details}
+            args: dict[str, Any] = {"itemName": itemName, "details": details, "include_candidate_details": include_candidate_details}
             if runtime.context.clover_creds is None:
                 err = runtime.context.clover_error or "Clover credentials unavailable."
                 out: dict[str, Any] = {
@@ -1189,6 +1203,7 @@ class ExecutionAgent:
             out = await validateRequestedItem(
                 itemName=itemName,
                 details=details,
+                include_candidate_details=include_candidate_details,
                 merchant_id=runtime.context.merchant_id,
                 creds=runtime.context.clover_creds,
             )
