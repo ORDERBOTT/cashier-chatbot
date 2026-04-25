@@ -1,3 +1,4 @@
+import itertools
 import json
 import re
 from datetime import datetime, timezone
@@ -462,6 +463,79 @@ def _find_closest_menu_items_from_menu(
         f"candidate_count={len(candidates)} top_name={top_matches[0][0]!r}"
     )
     return {"exact_match": None, "candidates": candidates, "match_confidence": "close"}
+
+
+def _find_best_word_subset_match(
+    item_name: str,
+    menu_items: dict,
+) -> dict | None:
+    """Try all ordered word subsequences of item_name to find the best-scoring
+    menu match when the full query returned matchConfidence 'none'.
+
+    Modifier words embedded anywhere in the query (leading, trailing, or middle)
+    inflate the query length beyond the menu item name, collapsing the
+    partial_ratio score below LOW_MENU_MATCH_THRESHOLD. This function finds the
+    highest-scoring subsequence of query words that matches a menu item, regardless
+    of where the non-item words appear.
+
+    The caller is responsible for treating excluded words as modifier hints.
+    Because validateRequestedItem already computes leftover_words from the
+    original itemName vs the matched item name, the excluded words are captured
+    automatically and merged into unified_details without extra handling here.
+
+    Returns None if no subset scores at or above LOW_MENU_MATCH_THRESHOLD.
+    Returns a dict with:
+        match_result   – result from _find_closest_menu_items_from_menu
+        excluded_words – list[str] words absent from the winning subset (original order)
+    """
+    words = item_name.lower().strip().split()
+    n = len(words)
+    if n < 2:
+        return None
+
+    items_name_set = set(menu_items.get("by_name", {}))
+    best_score = -1.0
+    best_indices: tuple[int, ...] | None = None
+
+    # Enumerate all ordered subsets (subsequences preserving word order) from
+    # length n-1 down to 2. Longer subsets are tried first so ties are broken
+    # in favour of the subset that drops the fewest words.
+    for subset_len in range(n - 1, 1, -1):
+        for indices in itertools.combinations(range(n), subset_len):
+            candidate = " ".join(words[i] for i in indices)
+            top = process.extractOne(candidate, items_name_set, scorer=_combined_scorer)
+            if top is None:
+                continue
+            score = float(top[1])
+            if score >= LOW_MENU_MATCH_THRESHOLD and score > best_score:
+                best_score = score
+                best_indices = indices
+
+    if best_indices is None:
+        print(
+            "[validateRequestedItem] subset_match no subset above threshold "
+            f"item_name={item_name!r}"
+        )
+        return None
+
+    excluded_indices = sorted(set(range(n)) - set(best_indices))
+    excluded_words = [words[i] for i in excluded_indices]
+    winning_name = " ".join(words[i] for i in best_indices)
+    print(
+        "[validateRequestedItem] subset_match winner "
+        f"winning_name={winning_name!r} score={best_score:.1f} "
+        f"excluded_words={excluded_words!r}"
+    )
+
+    match_result = _find_closest_menu_items_from_menu(
+        item_name=winning_name,
+        details=None,
+        menu_items=menu_items,
+    )
+    return {
+        "match_result": match_result,
+        "excluded_words": excluded_words,
+    }
 
 
 async def find_closest_menu_items(
@@ -1417,6 +1491,25 @@ async def validateRequestedItem(
             f"exactMatch_id={(exact_match.get('id') if exact_match else None)!r} "
             f"candidate_count={len(candidates)}"
         )
+
+        # When the full query returns "none", modifier words embedded anywhere
+        # in the query inflate its length past the menu item name, collapsing
+        # the partial_ratio score below the threshold. Try all ordered word
+        # subsequences to find the highest-scoring subset that matches a menu
+        # item; excluded words are picked up automatically by leftover_words
+        # below and merged into unified_details for the modifier resolver.
+        if match_confidence == "none":
+            subset = _find_best_word_subset_match(itemName, menu_items)
+            if subset is not None:
+                match_result = subset["match_result"]
+                exact_match = match_result.get("exact_match")
+                candidates = match_result.get("candidates", [])
+                match_confidence = match_result.get("match_confidence", "none")
+                print(
+                    "[validateRequestedItem] subset_match applied "
+                    f"matchConfidence={match_confidence!r} "
+                    f"exactMatch_id={(exact_match.get('id') if exact_match else None)!r}"
+                )
 
         base = {
             "exactMatch": exact_match,
