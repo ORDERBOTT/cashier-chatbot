@@ -829,6 +829,10 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
        requestedModifications is the list of raw modifier strings from the customer's request and
        existingModifierIds is the modifierIds list from the matched line item returned by step 1.
        - allValid == True                → IMMEDIATELY call updateItemInOrder (do NOT return text yet)
+       - Non-empty toRemove (and no invalid/requireChoice) → use toRemove modifier IDs as removeModifiers,
+         IMMEDIATELY call updateItemInOrder (do NOT return text yet)
+       - allValid == True AND non-empty toRemove → combine: addModifiers from valid, removeModifiers from toRemove,
+         IMMEDIATELY call updateItemInOrder (do NOT return text yet)
        - Non-empty invalid or requireChoice → STOP → ask the customer to clarify the modifier.
     4. Call updateItemInOrder(target={lineItemId from step 1}, updates={addModifiers/removeModifiers from step 3}).
        IMPORTANT — note preservation: Only include "note" in the updates dict when the customer
@@ -862,7 +866,9 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
 
     For CONFIRM_ORDER:
     - Call calcOrderPrice() — for internal tracking only. Do NOT surface the total or any price in your reply.
-      After calcOrderPrice returns → reply with exactly: "Thank you. Your order has been received. Allow me a moment to set your pickup time."
+      After calcOrderPrice returns:
+      - If lineItems is empty → do NOT confirm. Tell the customer their cart is empty and ask what they would like to add.
+      - Otherwise → reply with exactly: "Thank you. Your order has been received. Allow me a moment to set your pickup time."
       Only include the total if the customer explicitly asked for it in the same message.
 
     For CANCEL_ORDER:
@@ -882,6 +888,13 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
 
     For MENU_QUESTION (customer asks what is available or off today):
     - Call getItemsNotAvailableToday() → list unavailable items.
+
+    For MENU_QUESTION (customer asks about modifiers, options, or customizations for a specific item,
+    e.g. "what mods can I get for the chicken sando", "what are the options for X", "can I customize Y"):
+    - Call findClosestMenuItems(itemName) → use the returned modifier_groups to list all available options.
+    - List every modifier group by name and every option within it.
+    - Do NOT call validateRequestedItem. Do NOT ask for the customer's choice. Do NOT leave a clarification queue entry.
+    - This is a read-only informational answer — always mark done after replying.
 
     CONFIRMED ORDER RULE (check first, before all other rules):
     If context_object["is_order_confirmed"] is True, the customer's order has already been

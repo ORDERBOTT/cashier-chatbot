@@ -1126,14 +1126,17 @@ async def validateModifications(
     valid: list[dict] = []
     as_note: list[str] = []
     truly_invalid: list[str] = []
+    to_remove: list[dict] = []
     selected_keys: set[tuple[str, str]] = set()
 
+    option_by_id_pre = {opt["modifierId"]: opt for opt in flattened_options}
+    existing_modifier_objects: list[dict] = []
     if existingModifierIds:
-        option_by_id_pre = {opt["modifierId"]: opt for opt in flattened_options}
         for mid in existingModifierIds:
             opt = option_by_id_pre.get(mid)
             if opt:
                 selected_keys.add((opt["groupId"], mid))
+                existing_modifier_objects.append({"modifierId": mid, "name": opt["name"]})
         print(
             "[validateModifications] pre_populated_selected_keys "
             f"count={len(selected_keys)}"
@@ -1145,17 +1148,28 @@ async def validateModifications(
             details=unified_details,
             item_name=str(item_row.get("name", "")).strip(),
             available_options=flattened_options,
+            existing_modifiers=existing_modifier_objects,
         )
         print(
             "[validateModifications] ai_resolution "
             f"resolved_count={len(resolution.resolved)} "
+            f"to_remove={resolution.to_remove!r} "
             f"as_note={resolution.as_note!r} "
             f"unresolvable={resolution.unresolvable!r}"
         )
 
         option_by_id = {opt["modifierId"]: opt for opt in flattened_options}
+        existing_by_id = {m["modifierId"]: m for m in existing_modifier_objects}
         as_note = list(resolution.as_note)
         truly_invalid = list(resolution.unresolvable)
+
+        for mid in resolution.to_remove:
+            existing_opt = existing_by_id.get(mid)
+            if existing_opt:
+                to_remove.append({"modifierId": mid, "name": existing_opt["name"]})
+                print(f"[validateModifications] to_remove resolved modifierId={mid!r}")
+            else:
+                print(f"[validateModifications] to_remove id not in existing modifierId={mid!r}")
 
         for resolved_item in resolution.resolved:
             opt = option_by_id.get(resolved_item.modifierId)
@@ -1188,6 +1202,7 @@ async def validateModifications(
     require_choice = _required_modifier_groups(item_row, selected_keys)
     result = {
         "valid": valid,
+        "toRemove": to_remove,
         "invalid": truly_invalid,
         "asNote": as_note,
         "requireChoice": require_choice,

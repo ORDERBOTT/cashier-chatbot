@@ -226,6 +226,15 @@ Additionally, `validateModifications` used `_match_requested_modifier` (determin
 
 **Problem:** "my total is wrong" was classified as `order_question` (neutral info request) instead of `escalation` (complaint/dispute). The execution agent just called `calcOrderPrice` and reported the total rather than escalating.
 
+## 2026-04-27 - MENU_QUESTION modifier query stuck in clarification loop
+
+**Problem:** "What mods can I get for the chicken sando?" was parsed as `menu_question`, but the execution agent had no handler for item-specific modifier queries. It fell back to calling `validateRequestedItem`, which returned `missingRequireChoice: [Heat Level]` and left the entry in `need_clarification`. Every subsequent customer message was absorbed as an "answer" to the pending `menu_question` entry. When all qa pairs were filled the agent described options instead of adding — queue cleared, "yes" was parsed as `confirm_order`, empty cart confirmed.
+
+**Fix (`src/chatbot/promptsv2.py` — execution agent prompt):**
+Added a `For MENU_QUESTION (item modifier query)` block: call `findClosestMenuItems(itemName)`, list all modifier groups and options, never call `validateRequestedItem`, never ask for the customer's choice, always resolve done after replying.
+
+## 2026-04-27 - escalation vs order_question parser disambiguation
+
 **Fix (`src/chatbot/promptsv2.py` — `intent_labels_prompt` and `parsing_rules_prompt`):**
 - `order_question` description now explicitly says "neutral informational requests — NOT complaints or disputes."
 - `escalation` description now explicitly includes price/total disputes: "my total is wrong", "the price is off", "I was overcharged."
