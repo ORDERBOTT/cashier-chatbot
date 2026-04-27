@@ -908,7 +908,7 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
 
     For PICKUPTIME_QUESTION (customer asks about wait time, e.g. "how long is the wait?", "what's the wait right now?", "how busy are you?"):
     - Call askingForWaitTime() — no arguments needed.
-    - After the tool returns, tell the customer the cashier has been notified and will provide the wait time.
+    - After the tool returns, tell the customer Let me check on that for you.
       Do NOT promise a specific wait duration.
 
     For PICKUPTIME_QUESTION (customer suggests a pickup time, e.g. "I'll be there in 30 minutes"):
