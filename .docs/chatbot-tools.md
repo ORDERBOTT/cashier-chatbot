@@ -221,3 +221,95 @@ Additionally, `validateModifications` used `_match_requested_modifier` (determin
 ### Gotchas
 - `getOrderLineItems` does not return the Clover menu `itemId` — only `lineItemId`. Step 2 (`findClosestMenuItems`) is still needed to get the menu UUID for `validateModifications`. If `getOrderLineItems` is ever updated to expose `itemId` per line item, step 2 can be dropped.
 - The `MODIFY_ITEM` empty-order fallback (redirects to ADD_ITEM flow) still uses `validateRequestedItem` — this is correct since the item doesn't exist in the order yet.
+
+## 2026-04-28 - Firebase conversation and print logging
+
+### Overview
+Added Firestore logging so chatbot runtime logs now persist under each merchant's `Users/{original_merchant_id}/logs` collection. This captures:
+- every existing `print(...)` call from `orchestrator.py` and `tools.py`
+- each incoming customer message
+- each final AI reply
+
+### Key Changes
+- `src/chatbot/tools.py`
+  - Added Firebase log context helpers: `set_firebase_log_context`, `update_firebase_log_context`, `reset_firebase_log_context`.
+  - Added `log_firebase_event(...)` for structured log writes with `event_type`, `message`, `merchant_id`, `session_id`, `order_id`, `timestamp`, and `extra`.
+  - Overrode module `print(...)` to mirror messages to Firestore (`event_type="print"`) while still printing to stdout.
+- `src/chatbot/orchestrator.py`
+  - Added orchestrator print mirroring to Firestore with module-local context.
+  - In `handle_message`, log incoming customer text (`event_type="user_message"`) and every return-path assistant response (`event_type="ai_reply"`).
+  - Set shared tool logging context per request, and update it with `order_id` once current order details are loaded.
+
+### Data Shape (logs collection)
+- `event_type` (e.g. `print`, `user_message`, `ai_reply`)
+- `message` (raw text content)
+- `merchant_id` (original merchant Firebase UID)
+- `session_id`
+- `order_id`
+- `source` (`chatbot`)
+- `timestamp` (UTC ISO string)
+- `extra` (context like stage/source)
+
+### Gotchas / Decisions
+- Print mirroring uses `asyncio.create_task(...)` so log persistence is non-blocking and does not delay chatbot responses.
+- Logging is skipped safely when Firebase is unavailable or merchant ID is missing.
+- `order_id` may be blank at very early points in a turn (before order details are loaded), then is populated for subsequent logs in the same request.
+
+## 2026-04-28 - Append logs per order
+
+### Overview
+Changed Firestore write mode from "one document per event" to "append events into one document per order/session".
+
+### How It Works
+- `log_firebase_event(...)` now writes to a deterministic document id:
+  - `logs/{order_id}` when `order_id` is available
+  - fallback `logs/session:{session_id}` when `order_id` is missing
+- Events are appended with Firestore `ArrayUnion` into an `events` array on that document.
+- The parent log document keeps top-level metadata (`merchant_id`, `session_id`, `order_id`, `updated_at`, `source`) and merged updates.
+
+### Decision
+- This guarantees all events for the same `order_id` append into the same Firestore document instead of creating separate docs.
+
+## 2026-04-28 - VERSION prefix for print logs
+
+### Overview
+Updated chatbot print wrappers to prepend the environment `VERSION` value to every print line.
+
+### Format
+- Every print now emits:
+  - `[ <VERSION> ] [ <original message> ]`
+- If `VERSION` is missing, fallback label is `unknown`.
+
+### Files
+- `src/chatbot/tools.py` — module print wrapper prefixes every message using `settings.VERSION`.
+- `src/chatbot/orchestrator.py` — same prefix behavior for orchestrator-side print wrapper using `settings.VERSION`.
+
+## 2026-04-28 - Full flow + error coverage improvements
+
+### Overview
+Expanded log coverage so each request now has explicit lifecycle events and robust error capture.
+
+### Changes
+- `src/chatbot/orchestrator.py`
+  - Added `flow_start` at the beginning of `handle_message`.
+  - Added `flow_end` before every successful return path.
+  - Added `flow_error` in `except Exception` so failures are persisted before re-raise.
+- `src/chatbot/tools.py`
+  - Added `event_id` (UUID) to every event payload so repeated identical messages are not de-duplicated by Firestore `ArrayUnion`.
+
+### VERSION source fix
+- `src/config.py` now defines `VERSION: str = "unknown"` so `.env` is loaded into app settings.
+- Both print wrappers now use `settings.VERSION` (not `os.getenv`) to ensure the configured `.env` value is always used consistently.
+
+## 2026-04-28 - Order ID only log documents
+
+### Overview
+Removed session-based fallback document naming for Firestore logs.
+
+### Behavior
+- Logs now write **only** when `order_id` is present.
+- Document path is always `Users/{merchant_id}/logs/{order_id}`.
+- If `order_id` is empty/missing, log write is skipped.
+
+### File
+- `src/chatbot/tools.py` — `log_firebase_event(...)` now requires a non-empty `order_id` and no longer uses `session:{session_id}` fallback doc IDs.

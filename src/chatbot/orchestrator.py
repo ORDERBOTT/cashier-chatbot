@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import json
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
@@ -57,6 +59,10 @@ from src.chatbot.tools import (
     updateItemInOrder,
     validateModifications,
     validateRequestedItem,
+    log_firebase_event,
+    reset_firebase_log_context,
+    set_firebase_log_context,
+    update_firebase_log_context,
 )
 from datetime import datetime, timezone
 
@@ -78,6 +84,41 @@ _GEMINI_429_MAX_ATTEMPTS = 6
 _GEMINI_429_BACKOFF_SEC = 5.0
 
 _T = TypeVar("_T")
+_ORCHESTRATOR_LOG_CONTEXT: ContextVar[dict | None] = ContextVar(
+    "_ORCHESTRATOR_LOG_CONTEXT", default=None
+)
+
+
+async def _log_orchestrator_print_to_firebase(*, message: str, context: dict) -> None:
+    merchant_id = str(context.get("merchant_id") or "")
+    if not merchant_id:
+        return
+    await log_firebase_event(
+        event_type="print",
+        message=message,
+        merchant_id=merchant_id,
+        session_id=str(context.get("session_id") or ""),
+        order_id=str(context.get("order_id") or ""),
+        extra={"source": str(context.get("source") or "orchestrator")},
+    )
+
+
+def print(*args, **kwargs) -> None:  # type: ignore[override]
+    sep = kwargs.get("sep", " ")
+    raw_message = sep.join(str(arg) for arg in args)
+    version = settings.VERSION
+    message = f"[ {version} ] [ {raw_message} ]"
+    builtins.print(message, **kwargs)
+    context = _ORCHESTRATOR_LOG_CONTEXT.get()
+    if not context:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(
+        _log_orchestrator_print_to_firebase(message=message, context=context)
+    )
 
 
 def _is_gemini_http_503(exc: AIServiceError) -> bool:
@@ -449,288 +490,478 @@ class Orchestrator:
         self,
         request: ChatbotV2MessageRequest,
     ) -> ChatbotV2MessageResponse:
-        now = datetime.now(timezone.utc).isoformat()
-        redis_key = _session_messages_redis_key(request.session_id)
-        await cache_list_append(
-            redis_key,
-            json.dumps(
-                {"role": "user", "content": request.user_message, "timestamp": now}
-            ),
+        orchestrator_log_token = _ORCHESTRATOR_LOG_CONTEXT.set(
+            {
+                "merchant_id": request.merchant_id,
+                "session_id": request.session_id,
+                "order_id": "",
+                "source": "orchestrator",
+            }
         )
-
-        execution_context = await self._build_execution_context(request)
-
-        queue = await get_intent_queue(request.session_id)
-        stage = await get_ordering_stage(request.session_id)
-        unfulfilled = [e for e in queue if e.get("status") == "need_clarification"]
-        print(
-            "[Orchestrator] queue loaded",
-            f"session_id={request.session_id!r}",
-            f"total={len(queue)}",
-            f"unfulfilled={len(unfulfilled)}",
-            f"stage={stage!r}",
+        tools_log_token = set_firebase_log_context(
+            merchant_id=request.merchant_id,
+            session_id=request.session_id,
+            order_id="",
+            source="tools",
         )
-
-        context = await self._build_parsing_context(
-            request,
-            clover_creds=execution_context.clover_creds,
-            unfulfilled_queue=unfulfilled,
-        )
-        parsed_input = await self.parsing_agent.run(context=context)
-
-        parsed_data = parsed_input.parsed_requests.data
-        non_confirm_intents = [i for i in parsed_data if i.intent.value != "confirm_order"]
-        only_confirm = bool(parsed_data) and not non_confirm_intents
-
-        # BRANCH A: customer says "nothing else" → show order summary and ask to confirm
-        if stage == "awaiting_anything_else" and only_confirm:
-            summary = await self._get_order_summary(
-                request.session_id, execution_context.clover_creds
+        order_id_for_logs = ""
+        stage_for_logs = "unknown"
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            redis_key = _session_messages_redis_key(request.session_id)
+            await cache_list_append(
+                redis_key,
+                json.dumps(
+                    {"role": "user", "content": request.user_message, "timestamp": now}
+                ),
             )
-            await set_ordering_stage(request.session_id, "awaiting_order_confirm")
-            final_reply = f"{summary}\n\nWould you like to confirm your order?"
+
+            execution_context = await self._build_execution_context(request)
+
+            queue = await get_intent_queue(request.session_id)
+            stage = await get_ordering_stage(request.session_id)
+            stage_for_logs = stage
+            await log_firebase_event(
+                event_type="flow_start",
+                message=f"handle_message start for session {request.session_id}",
+                merchant_id=request.merchant_id,
+                session_id=request.session_id,
+                order_id=order_id_for_logs,
+                extra={"stage": stage_for_logs, "source": "orchestrator"},
+            )
+            await log_firebase_event(
+                event_type="user_message",
+                message=request.user_message,
+                merchant_id=request.merchant_id,
+                session_id=request.session_id,
+                order_id=order_id_for_logs,
+                extra={"stage": stage, "source": "orchestrator"},
+            )
+            unfulfilled = [e for e in queue if e.get("status") == "need_clarification"]
+            print(
+                "[Orchestrator] queue loaded",
+                f"session_id={request.session_id!r}",
+                f"total={len(queue)}",
+                f"unfulfilled={len(unfulfilled)}",
+                f"stage={stage!r}",
+            )
+
+            context = await self._build_parsing_context(
+                request,
+                clover_creds=execution_context.clover_creds,
+                unfulfilled_queue=unfulfilled,
+            )
+            order_id_for_logs = context.current_order_details.order_id or ""
+            _ORCHESTRATOR_LOG_CONTEXT.set(
+                {
+                    "merchant_id": request.merchant_id,
+                    "session_id": request.session_id,
+                    "order_id": order_id_for_logs,
+                    "source": "orchestrator",
+                }
+            )
+            update_firebase_log_context(order_id=order_id_for_logs)
+            parsed_input = await self.parsing_agent.run(context=context)
+
+            parsed_data = parsed_input.parsed_requests.data
+            non_confirm_intents = [
+                i for i in parsed_data if i.intent.value != "confirm_order"
+            ]
+            only_confirm = bool(parsed_data) and not non_confirm_intents
+
+            # BRANCH A: customer says "nothing else" → show order summary and ask to confirm
+            if stage == "awaiting_anything_else" and only_confirm:
+                summary = await self._get_order_summary(
+                    request.session_id, execution_context.clover_creds
+                )
+                await set_ordering_stage(request.session_id, "awaiting_order_confirm")
+                final_reply = f"{summary}\n\nWould you like to confirm your order?"
+                ai_now = datetime.now(timezone.utc).isoformat()
+                await cache_list_append(
+                    redis_key,
+                    json.dumps(
+                        {"role": "assistant", "content": final_reply, "timestamp": ai_now}
+                    ),
+                )
+                await log_firebase_event(
+                    event_type="ai_reply",
+                    message=final_reply,
+                    merchant_id=request.merchant_id,
+                    session_id=request.session_id,
+                    order_id=order_id_for_logs,
+                    extra={"stage": "awaiting_order_confirm", "source": "orchestrator"},
+                )
+                await log_firebase_event(
+                    event_type="flow_end",
+                    message="handle_message completed with branch A reply",
+                    merchant_id=request.merchant_id,
+                    session_id=request.session_id,
+                    order_id=order_id_for_logs,
+                    extra={"stage": "awaiting_order_confirm", "source": "orchestrator"},
+                )
+                print(
+                    "[Orchestrator] branch A: showed summary, stage → awaiting_order_confirm"
+                )
+                return ChatbotV2MessageResponse(
+                    system_response=final_reply,
+                    session_id=request.session_id,
+                )
+
+            # Apply answers from parsing agent to existing unfulfilled entries
+            for mod in parsed_input.parsed_requests.modified_entries:
+                for entry in queue:
+                    if entry.get("entry_id") == mod.entry_id:
+                        filled_qa = [qa.model_dump() for qa in mod.qa]
+                        entry["qa"] = filled_qa
+                        all_answered = all(
+                            p.get("answer") is not None for p in filled_qa
+                        )
+                        if all_answered:
+                            entry["status"] = "pending"
+                        print(
+                            "[Orchestrator] applied modified_entry",
+                            f"entry_id={mod.entry_id!r}",
+                            f"qa_count={len(filled_qa)}",
+                            f"all_answered={all_answered}",
+                        )
+
+            # Handle introduce_name directly — no LLM round-trip needed.
+            for item in (
+                non_confirm_intents if stage == "awaiting_anything_else" else parsed_data
+            ):
+                if item.intent.value == "introduce_name":
+                    name = item.request_items.name if item.request_items else ""
+                    if name:
+                        await saveHumanName(
+                            name=name,
+                            phone_number=execution_context.phone_number,
+                            firebase_uid=execution_context.original_merchant_id or "",
+                        )
+                        print(
+                            f"[Orchestrator] introduce_name handled inline name={name!r}"
+                        )
+
+            # BRANCH: customer replied to "what name for the order?"
+            if stage == "awaiting_name_before_confirm":
+                has_name = any(i.intent.value == "introduce_name" for i in parsed_data)
+                if has_name:
+                    await cache_set(
+                        _session_status_redis_key(request.session_id), "confirmed"
+                    )
+                    await set_ordering_stage(request.session_id, "ordering")
+                    branch_reply = "Thank you. Your order has been received. Allow me a moment to set your pickup time."
+                    print(
+                        "[Orchestrator] name provided, order confirmed inline, stage → ordering"
+                    )
+                else:
+                    branch_reply = (
+                        "I still need a name for the order. What name should I use?"
+                    )
+                    print("[Orchestrator] no name provided, re-asking for name")
+                ai_now = datetime.now(timezone.utc).isoformat()
+                await cache_list_append(
+                    redis_key,
+                    json.dumps(
+                        {
+                            "role": "assistant",
+                            "content": branch_reply,
+                            "timestamp": ai_now,
+                        }
+                    ),
+                )
+                await log_firebase_event(
+                    event_type="ai_reply",
+                    message=branch_reply,
+                    merchant_id=request.merchant_id,
+                    session_id=request.session_id,
+                    order_id=order_id_for_logs,
+                    extra={"stage": stage, "source": "orchestrator"},
+                )
+                await log_firebase_event(
+                    event_type="flow_end",
+                    message="handle_message completed with awaiting_name_before_confirm reply",
+                    merchant_id=request.merchant_id,
+                    session_id=request.session_id,
+                    order_id=order_id_for_logs,
+                    extra={"stage": stage, "source": "orchestrator"},
+                )
+                return ChatbotV2MessageResponse(
+                    system_response=branch_reply,
+                    session_id=request.session_id,
+                )
+
+            # NAME GATE: require a name before confirming the order.
+            if stage == "awaiting_order_confirm" and only_confirm:
+                profile = await getHumanProfile(
+                    phone_number=execution_context.phone_number,
+                    firebase_uid=execution_context.original_merchant_id or "",
+                )
+                if not profile.get("name"):
+                    await set_ordering_stage(
+                        request.session_id, "awaiting_name_before_confirm"
+                    )
+                    gate_reply = "What name should I put the order under?"
+                    print(
+                        "[Orchestrator] name gate: no name on record, asking for name, stage → awaiting_name_before_confirm"
+                    )
+                    ai_now = datetime.now(timezone.utc).isoformat()
+                    await cache_list_append(
+                        redis_key,
+                        json.dumps(
+                            {
+                                "role": "assistant",
+                                "content": gate_reply,
+                                "timestamp": ai_now,
+                            }
+                        ),
+                    )
+                    await log_firebase_event(
+                        event_type="ai_reply",
+                        message=gate_reply,
+                        merchant_id=request.merchant_id,
+                        session_id=request.session_id,
+                        order_id=order_id_for_logs,
+                        extra={
+                            "stage": "awaiting_name_before_confirm",
+                            "source": "orchestrator",
+                        },
+                    )
+                    await log_firebase_event(
+                        event_type="flow_end",
+                        message="handle_message completed with name-gate reply",
+                        merchant_id=request.merchant_id,
+                        session_id=request.session_id,
+                        order_id=order_id_for_logs,
+                        extra={
+                            "stage": "awaiting_name_before_confirm",
+                            "source": "orchestrator",
+                        },
+                    )
+                    return ChatbotV2MessageResponse(
+                        system_response=gate_reply,
+                        session_id=request.session_id,
+                    )
+
+            # Add new entries; in awaiting_anything_else skip lone confirm (already handled above)
+            items_to_queue = (
+                non_confirm_intents if stage == "awaiting_anything_else" else parsed_data
+            )
+            items_to_queue = [
+                i for i in items_to_queue if i.intent.value != "introduce_name"
+            ]
+            only_greetings_queued = bool(items_to_queue) and all(
+                i.intent.value == "greeting" for i in items_to_queue
+            )
+            if len(items_to_queue) > 1:
+                items_to_queue = [
+                    i for i in items_to_queue if i.intent.value != "greeting"
+                ]
+            only_greetings_queued = bool(items_to_queue) and all(
+                i.intent.value == "greeting" for i in items_to_queue
+            )
+            for item in items_to_queue:
+                new_entry = {
+                    "entry_id": str(uuid.uuid4()),
+                    "status": "pending",
+                    "parsed_item": item.model_dump(by_alias=True, mode="json"),
+                    "qa": [],
+                }
+                queue.append(new_entry)
+                print(
+                    "[Orchestrator] new queue entry",
+                    f"entry_id={new_entry['entry_id']!r}",
+                    f"intent={item.intent.value!r}",
+                )
+
+            # When the customer replied but parsing found no new intents (e.g. "no", "nope"),
+            # their message is a response to a pending clarification. Promote those entries
+            # back to "pending" so the execution agent can react to the reply this turn.
+            if not parsed_data and unfulfilled:
+                for entry in queue:
+                    if entry.get("status") == "need_clarification":
+                        entry["status"] = "pending"
+                        print(
+                            "[Orchestrator] promoted need_clarification → pending",
+                            f"entry_id={entry.get('entry_id')!r}",
+                        )
+
+            session_status = await cache_get(_session_status_redis_key(request.session_id))
+            is_order_confirmed = session_status == "confirmed"
+            prepared_context = self.prepare_agent_context(
+                parsed_input=parsed_input,
+                execution_context=execution_context,
+                is_order_confirmed=is_order_confirmed,
+            )
+
+            _INFORMATIONAL_INTENTS = {
+                "order_question",
+                "menu_question",
+                "restaurant_question",
+                "pickuptime_question",
+                "identity_question",
+                "greeting",
+                "introduce_name",
+            }
+
+            # Execute all pending entries in order
+            replies: list[str] = []
+            entries_processed = 0
+            all_succeeded = True
+            order_confirmed_this_turn = False
+            processed_intents: set[str] = set()
+
+            for entry in queue:
+                if entry.get("status") != "pending":
+                    continue
+                entries_processed += 1
+                intent_label = entry.get("parsed_item", {}).get("Intent", "")
+                processed_intents.add(intent_label)
+
+                # Post-confirmation: route non-informational requests directly to human
+                if is_order_confirmed and intent_label not in _INFORMATIONAL_INTENTS:
+                    await humanInterventionNeeded(
+                        session_id=prepared_context.session_id,
+                        escalation_type="post_confirm_request",
+                        merchant_id=prepared_context.original_merchant_id or "",
+                    )
+                    entry["status"] = "done"
+                    replies.append("Let me check on that for you.")
+                    print(
+                        "[Orchestrator] post-confirm request routed to human",
+                        f"entry_id={entry.get('entry_id')!r}",
+                        f"intent={intent_label!r}",
+                    )
+                    continue
+
+                result = await self.execution_agent.run_single(
+                    entry=entry,
+                    context_object=prepared_context,
+                )
+                escalated = False
+                # Informational intents must never stay in the queue as need_clarification.
+                # extract_questions_from_reply picks up "Is there anything else?" type tails
+                # which would cause the entry to persist and replay on the next turn.
+                force_done = intent_label in _INFORMATIONAL_INTENTS
+                if result.success or force_done:
+                    entry["status"] = "done"
+                    if entry.get("parsed_item", {}).get("Intent") == "confirm_order":
+                        order_confirmed_this_turn = True
+                else:
+                    entry["status"] = "need_clarification"
+                    all_succeeded = False
+                    for q in result.clarification_questions:
+                        entry["qa"].append({"question": q, "answer": None})
+                    if len(entry["qa"]) > settings.MAX_CLARIFICATION_QUESTIONS:
+                        item_name = (
+                            entry.get("parsed_item", {})
+                            .get("Request_items", {})
+                            .get("name", "unknown item")
+                        )
+                        await humanInterventionNeeded(
+                            session_id=prepared_context.session_id,
+                            escalation_type="questions_about_their_order",
+                            merchant_id=prepared_context.original_merchant_id or "",
+                        )
+                        entry["status"] = "done"
+                        escalated = True
+                        replies.append(
+                            "I am having trouble processing that item. A team member will follow up with you shortly."
+                        )
+                        print(
+                            "[Orchestrator] escalated after max clarification attempts",
+                            f"entry_id={entry.get('entry_id')!r}",
+                            f"qa_count={len(entry['qa'])}",
+                            f"item_name={item_name!r}",
+                        )
+                if result.reply and not escalated:
+                    replies.append(result.reply)
+                reply_preview = (result.reply or "").replace("\n", " ")[:120]
+                print(
+                    "[Orchestrator] entry executed",
+                    f"entry_id={entry.get('entry_id')!r}",
+                    f"success={result.success}",
+                    f"reply_preview={reply_preview!r}",
+                )
+
+            only_informational_queued = bool(processed_intents) and processed_intents.issubset(
+                _INFORMATIONAL_INTENTS
+            )
+
+            queue = [e for e in queue if e.get("status") != "done"]
+            await save_intent_queue(request.session_id, queue)
+
+            final_reply = "\n".join(r.strip() for r in replies if r.strip()) or "Understood."
+
+            # Update ordering stage
+            if order_confirmed_this_turn:
+                await cache_set(_session_status_redis_key(request.session_id), "confirmed")
+                await set_ordering_stage(request.session_id, "ordering")
+                print("[Orchestrator] order confirmed, stage → ordering")
+            elif stage == "awaiting_order_confirm" and non_confirm_intents:
+                # Customer changed their mind and added items instead of confirming
+                await set_ordering_stage(request.session_id, "ordering")
+                print("[Orchestrator] customer changed mind, stage → ordering")
+            elif (
+                entries_processed > 0
+                and not queue
+                and all_succeeded
+                and not only_greetings_queued
+                and not only_informational_queued
+            ):
+                final_reply += "\nIs there anything else you would like to add?"
+                await set_ordering_stage(request.session_id, "awaiting_anything_else")
+                print("[Orchestrator] all done, stage → awaiting_anything_else")
+
             ai_now = datetime.now(timezone.utc).isoformat()
             await cache_list_append(
                 redis_key,
-                json.dumps({"role": "assistant", "content": final_reply, "timestamp": ai_now}),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": final_reply,
+                        "timestamp": ai_now,
+                    }
+                ),
             )
-            print("[Orchestrator] branch A: showed summary, stage → awaiting_order_confirm")
+            await log_firebase_event(
+                event_type="ai_reply",
+                message=final_reply,
+                merchant_id=request.merchant_id,
+                session_id=request.session_id,
+                order_id=order_id_for_logs,
+                extra={
+                    "stage": await get_ordering_stage(request.session_id),
+                    "source": "orchestrator",
+                },
+            )
+            await log_firebase_event(
+                event_type="flow_end",
+                message="handle_message completed successfully",
+                merchant_id=request.merchant_id,
+                session_id=request.session_id,
+                order_id=order_id_for_logs,
+                extra={
+                    "stage": await get_ordering_stage(request.session_id),
+                    "source": "orchestrator",
+                },
+            )
             return ChatbotV2MessageResponse(
                 system_response=final_reply,
                 session_id=request.session_id,
             )
-
-        # Apply answers from parsing agent to existing unfulfilled entries
-        for mod in parsed_input.parsed_requests.modified_entries:
-            for entry in queue:
-                if entry.get("entry_id") == mod.entry_id:
-                    filled_qa = [qa.model_dump() for qa in mod.qa]
-                    entry["qa"] = filled_qa
-                    all_answered = all(p.get("answer") is not None for p in filled_qa)
-                    if all_answered:
-                        entry["status"] = "pending"
-                    print(
-                        "[Orchestrator] applied modified_entry",
-                        f"entry_id={mod.entry_id!r}",
-                        f"qa_count={len(filled_qa)}",
-                        f"all_answered={all_answered}",
-                    )
-
-        # Handle introduce_name directly — no LLM round-trip needed.
-        for item in (non_confirm_intents if stage == "awaiting_anything_else" else parsed_data):
-            if item.intent.value == "introduce_name":
-                name = item.request_items.name if item.request_items else ""
-                if name:
-                    await saveHumanName(
-                        name=name,
-                        phone_number=execution_context.phone_number,
-                        firebase_uid=execution_context.original_merchant_id or "",
-                    )
-                    print(f"[Orchestrator] introduce_name handled inline name={name!r}")
-
-        # BRANCH: customer replied to "what name for the order?"
-        if stage == "awaiting_name_before_confirm":
-            has_name = any(i.intent.value == "introduce_name" for i in parsed_data)
-            if has_name:
-                await cache_set(_session_status_redis_key(request.session_id), "confirmed")
-                await set_ordering_stage(request.session_id, "ordering")
-                branch_reply = "Thank you. Your order has been received. Allow me a moment to set your pickup time."
-                print("[Orchestrator] name provided, order confirmed inline, stage → ordering")
-            else:
-                branch_reply = "I still need a name for the order. What name should I use?"
-                print("[Orchestrator] no name provided, re-asking for name")
-            ai_now = datetime.now(timezone.utc).isoformat()
-            await cache_list_append(
-                redis_key,
-                json.dumps({"role": "assistant", "content": branch_reply, "timestamp": ai_now}),
-            )
-            return ChatbotV2MessageResponse(
-                system_response=branch_reply,
+        except Exception as exc:
+            await log_firebase_event(
+                event_type="flow_error",
+                message=f"handle_message failed: {exc!r}",
+                merchant_id=request.merchant_id,
                 session_id=request.session_id,
+                order_id=order_id_for_logs,
+                extra={"stage": stage_for_logs, "source": "orchestrator"},
             )
-
-        # NAME GATE: require a name before confirming the order.
-        if stage == "awaiting_order_confirm" and only_confirm:
-            profile = await getHumanProfile(
-                phone_number=execution_context.phone_number,
-                firebase_uid=execution_context.original_merchant_id or "",
-            )
-            if not profile.get("name"):
-                await set_ordering_stage(request.session_id, "awaiting_name_before_confirm")
-                gate_reply = "What name should I put the order under?"
-                print("[Orchestrator] name gate: no name on record, asking for name, stage → awaiting_name_before_confirm")
-                ai_now = datetime.now(timezone.utc).isoformat()
-                await cache_list_append(
-                    redis_key,
-                    json.dumps({"role": "assistant", "content": gate_reply, "timestamp": ai_now}),
-                )
-                return ChatbotV2MessageResponse(
-                    system_response=gate_reply,
-                    session_id=request.session_id,
-                )
-
-        # Add new entries; in awaiting_anything_else skip lone confirm (already handled above)
-        items_to_queue = non_confirm_intents if stage == "awaiting_anything_else" else parsed_data
-        items_to_queue = [i for i in items_to_queue if i.intent.value != "introduce_name"]
-        only_greetings_queued = bool(items_to_queue) and all(i.intent.value == "greeting" for i in items_to_queue)
-        if len(items_to_queue) > 1:
-            items_to_queue = [i for i in items_to_queue if i.intent.value != "greeting"]
-        only_greetings_queued = bool(items_to_queue) and all(i.intent.value == "greeting" for i in items_to_queue)
-        for item in items_to_queue:
-            new_entry = {
-                "entry_id": str(uuid.uuid4()),
-                "status": "pending",
-                "parsed_item": item.model_dump(by_alias=True, mode="json"),
-                "qa": [],
-            }
-            queue.append(new_entry)
-            print(
-                "[Orchestrator] new queue entry",
-                f"entry_id={new_entry['entry_id']!r}",
-                f"intent={item.intent.value!r}",
-            )
-
-        # When the customer replied but parsing found no new intents (e.g. "no", "nope"),
-        # their message is a response to a pending clarification. Promote those entries
-        # back to "pending" so the execution agent can react to the reply this turn.
-        if not parsed_data and unfulfilled:
-            for entry in queue:
-                if entry.get("status") == "need_clarification":
-                    entry["status"] = "pending"
-                    print(
-                        "[Orchestrator] promoted need_clarification → pending",
-                        f"entry_id={entry.get('entry_id')!r}",
-                    )
-
-        session_status = await cache_get(_session_status_redis_key(request.session_id))
-        is_order_confirmed = session_status == "confirmed"
-        prepared_context = self.prepare_agent_context(
-            parsed_input=parsed_input,
-            execution_context=execution_context,
-            is_order_confirmed=is_order_confirmed,
-        )
-
-        _INFORMATIONAL_INTENTS = {
-            "order_question",
-            "menu_question",
-            "restaurant_question",
-            "pickuptime_question",
-            "identity_question",
-            "greeting",
-            "introduce_name",
-        }
-
-        # Execute all pending entries in order
-        replies: list[str] = []
-        entries_processed = 0
-        all_succeeded = True
-        order_confirmed_this_turn = False
-        processed_intents: set[str] = set()
-
-        for entry in queue:
-            if entry.get("status") != "pending":
-                continue
-            entries_processed += 1
-            intent_label = entry.get("parsed_item", {}).get("Intent", "")
-            processed_intents.add(intent_label)
-
-            # Post-confirmation: route non-informational requests directly to human
-            if is_order_confirmed and intent_label not in _INFORMATIONAL_INTENTS:
-                await humanInterventionNeeded(
-                    session_id=prepared_context.session_id,
-                    escalation_type="post_confirm_request",
-                    merchant_id=prepared_context.original_merchant_id or "",
-                )
-                entry["status"] = "done"
-                replies.append("Let me check on that for you.")
-                print(
-                    "[Orchestrator] post-confirm request routed to human",
-                    f"entry_id={entry.get('entry_id')!r}",
-                    f"intent={intent_label!r}",
-                )
-                continue
-
-            result = await self.execution_agent.run_single(
-                entry=entry,
-                context_object=prepared_context,
-            )
-            escalated = False
-            # Informational intents must never stay in the queue as need_clarification.
-            # extract_questions_from_reply picks up "Is there anything else?" type tails
-            # which would cause the entry to persist and replay on the next turn.
-            force_done = intent_label in _INFORMATIONAL_INTENTS
-            if result.success or force_done:
-                entry["status"] = "done"
-                if entry.get("parsed_item", {}).get("Intent") == "confirm_order":
-                    order_confirmed_this_turn = True
-            else:
-                entry["status"] = "need_clarification"
-                all_succeeded = False
-                for q in result.clarification_questions:
-                    entry["qa"].append({"question": q, "answer": None})
-                if len(entry["qa"]) > settings.MAX_CLARIFICATION_QUESTIONS:
-                    item_name = entry.get("parsed_item", {}).get("Request_items", {}).get("name", "unknown item")
-                    await humanInterventionNeeded(
-                        session_id=prepared_context.session_id,
-                        escalation_type="questions_about_their_order",
-                        merchant_id=prepared_context.original_merchant_id or "",
-                    )
-                    entry["status"] = "done"
-                    escalated = True
-                    replies.append("I am having trouble processing that item. A team member will follow up with you shortly.")
-                    print(
-                        "[Orchestrator] escalated after max clarification attempts",
-                        f"entry_id={entry.get('entry_id')!r}",
-                        f"qa_count={len(entry['qa'])}",
-                        f"item_name={item_name!r}",
-                    )
-            if result.reply and not escalated:
-                replies.append(result.reply)
-            reply_preview = (result.reply or "").replace("\n", " ")[:120]
-            print(
-                "[Orchestrator] entry executed",
-                f"entry_id={entry.get('entry_id')!r}",
-                f"success={result.success}",
-                f"reply_preview={reply_preview!r}",
-            )
-
-        only_informational_queued = bool(processed_intents) and processed_intents.issubset(_INFORMATIONAL_INTENTS)
-
-        queue = [e for e in queue if e.get("status") != "done"]
-        await save_intent_queue(request.session_id, queue)
-
-        final_reply = "\n".join(r.strip() for r in replies if r.strip()) or "Understood."
-
-        # Update ordering stage
-        if order_confirmed_this_turn:
-            await cache_set(_session_status_redis_key(request.session_id), "confirmed")
-            await set_ordering_stage(request.session_id, "ordering")
-            print("[Orchestrator] order confirmed, stage → ordering")
-        elif stage == "awaiting_order_confirm" and non_confirm_intents:
-            # Customer changed their mind and added items instead of confirming
-            await set_ordering_stage(request.session_id, "ordering")
-            print("[Orchestrator] customer changed mind, stage → ordering")
-        elif entries_processed > 0 and not queue and all_succeeded and not only_greetings_queued and not only_informational_queued:
-            final_reply += "\nIs there anything else you would like to add?"
-            await set_ordering_stage(request.session_id, "awaiting_anything_else")
-            print("[Orchestrator] all done, stage → awaiting_anything_else")
-
-        ai_now = datetime.now(timezone.utc).isoformat()
-        await cache_list_append(
-            redis_key,
-            json.dumps(
-                {
-                    "role": "assistant",
-                    "content": final_reply,
-                    "timestamp": ai_now,
-                }
-            ),
-        )
-
-        return ChatbotV2MessageResponse(
-            system_response=final_reply,
-            session_id=request.session_id,
-        )
+            raise
+        finally:
+            _ORCHESTRATOR_LOG_CONTEXT.reset(orchestrator_log_token)
+            reset_firebase_log_context(tools_log_token)
 
     async def _get_order_summary(self, session_id: str, creds: dict | None) -> str:
         result = await calcOrderPrice(session_id, creds=creds)

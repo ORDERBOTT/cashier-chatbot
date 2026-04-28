@@ -1,9 +1,14 @@
 import itertools
 import json
 import re
+import builtins
+import asyncio
+import uuid
+from contextvars import ContextVar, Token
 from datetime import datetime, timezone
 
 import httpx
+from google.cloud.firestore_v1 import ArrayUnion
 from rapidfuzz import process
 
 from src.cache import (
@@ -56,6 +61,116 @@ from src.chatbot.utils import _summary_prompt_messages, _serialize_cached_histor
 from src.chatbot.utils import _normalize_menu, _persist_menu_items_cache, _menu_cache_age_seconds, _menu_snapshot_considered_fresh
 from src.chatbot.utils import _normalize_order_line_items, _line_item_quantity, _extract_line_item_modification_records
 from src.chatbot.utils import _item_not_found_result, _availability_result, _describe_update_changes, _pricing_breakdown_from_order 
+
+_FIREBASE_LOG_CONTEXT: ContextVar[dict | None] = ContextVar(
+    "_FIREBASE_LOG_CONTEXT", default=None
+)
+
+
+def set_firebase_log_context(
+    *, merchant_id: str, session_id: str | None = None, order_id: str | None = None, source: str | None = None
+) -> Token:
+    """Set per-request logging context for Firestore print mirroring."""
+    payload = {
+        "merchant_id": merchant_id,
+        "session_id": session_id,
+        "order_id": order_id,
+        "source": source,
+    }
+    return _FIREBASE_LOG_CONTEXT.set(payload)
+
+
+def update_firebase_log_context(*, order_id: str | None = None) -> None:
+    """Update log context values mid-request without resetting token state."""
+    current = _FIREBASE_LOG_CONTEXT.get() or {}
+    if order_id is not None:
+        current["order_id"] = order_id
+    _FIREBASE_LOG_CONTEXT.set(current)
+
+
+def reset_firebase_log_context(token: Token) -> None:
+    """Reset log context to the previous state."""
+    _FIREBASE_LOG_CONTEXT.reset(token)
+
+
+async def log_firebase_event(
+    *,
+    event_type: str,
+    message: str,
+    merchant_id: str,
+    session_id: str | None = None,
+    order_id: str | None = None,
+    extra: dict | None = None,
+) -> None:
+    """Persist a structured chatbot log event to Firestore."""
+    db = _firebase.firebaseDatabase
+    normalized_order_id = (order_id or "").strip()
+    if db is None or not merchant_id or not normalized_order_id:
+        return
+    event_payload = {
+        "event_id": str(uuid.uuid4()),
+        "event_type": event_type,
+        "message": message,
+        "merchant_id": merchant_id,
+        "session_id": session_id or "",
+        "order_id": normalized_order_id,
+        "source": "chatbot",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "extra": extra or {},
+    }
+    doc_id = normalized_order_id
+    await (
+        db.collection("Users")
+        .document(merchant_id)
+        .collection("logs")
+        .document(doc_id)
+        .set(
+            {
+                "merchant_id": merchant_id,
+                "session_id": session_id or "",
+                "order_id": normalized_order_id,
+                "source": "chatbot",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "events": ArrayUnion([event_payload]),
+            },
+            merge=True,
+        )
+    )
+
+
+async def _log_print_to_firebase(
+    *,
+    message: str,
+    context: dict,
+) -> None:
+    merchant_id = str(context.get("merchant_id") or "")
+    if not merchant_id:
+        return
+    await log_firebase_event(
+        event_type="print",
+        message=message,
+        merchant_id=merchant_id,
+        session_id=str(context.get("session_id") or ""),
+        order_id=str(context.get("order_id") or ""),
+        extra={"source": str(context.get("source") or "tools")},
+    )
+
+
+def print(*args, **kwargs) -> None:  # type: ignore[override]
+    """Mirror module prints to Firestore while keeping stdout output."""
+    sep = kwargs.get("sep", " ")
+    raw_message = sep.join(str(arg) for arg in args)
+    version = settings.VERSION
+    message = f"[ {version} ] [ {raw_message} ]"
+    builtins.print(message, **kwargs)
+    context = _FIREBASE_LOG_CONTEXT.get()
+    if not context:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(_log_print_to_firebase(message=message, context=context))
 
 
 async def _get_order_data(session_id: str, creds: dict, *, force_refresh: bool = False) -> dict:
