@@ -655,7 +655,11 @@ class Orchestrator:
                 context_object=prepared_context,
             )
             escalated = False
-            if result.success:
+            # Informational intents must never stay in the queue as need_clarification.
+            # extract_questions_from_reply picks up "Is there anything else?" type tails
+            # which would cause the entry to persist and replay on the next turn.
+            force_done = intent_label in _INFORMATIONAL_INTENTS
+            if result.success or force_done:
                 entry["status"] = "done"
                 if entry.get("parsed_item", {}).get("Intent") == "confirm_order":
                     order_confirmed_this_turn = True
@@ -1061,13 +1065,13 @@ class ExecutionAgent:
             ),
             is_order_confirmed=context_object.is_order_confirmed,
         )
-        active_tools = self._build_tools(runtime, tracker=tracker)
-
         entry_id = entry.get("entry_id", "")
         parsed_item = entry.get("parsed_item", {})
         qa = entry.get("qa", [])
 
         intent_label = parsed_item.get("Intent", "unknown")
+        force_refresh_order = intent_label == "order_question"
+        active_tools = self._build_tools(runtime, tracker=tracker, force_refresh_order=force_refresh_order)
         item_name = (parsed_item.get("Request_items") or {}).get("name", "")
         print(
             "[ExecutionAgent] run_single start",
@@ -1206,6 +1210,8 @@ class ExecutionAgent:
         self,
         runtime: ExecutionToolRuntime,
         tracker: ExecutionTracker | None = None,
+        *,
+        force_refresh_order: bool = False,
     ) -> list[llm_client.GeminiFunctionTool]:
         def _log_tool_call_io(
             tool_name: str, arguments: dict[str, Any], result: dict[str, Any]
@@ -1469,6 +1475,7 @@ class ExecutionAgent:
             out = await getOrderLineItems(
                 session_id=runtime.context.session_id,
                 creds=runtime.context.clover_creds,
+                force_refresh=force_refresh_order,
             )
             _log_tool_call_io("getOrderLineItems", args, out)
             return out

@@ -3013,7 +3013,7 @@ async def cancelOrder(session_id: str, creds: dict | None = None) -> dict:
         }
 
 
-async def getOrderLineItems(session_id: str, creds: dict | None = None) -> dict:
+async def getOrderLineItems(session_id: str, creds: dict | None = None, *, force_refresh: bool = False) -> dict:
     """Return all line items currently in the customer's cart without modifying the order.
 
     Use this tool when you need to inspect what is in the order before acting on it —
@@ -3054,7 +3054,7 @@ async def getOrderLineItems(session_id: str, creds: dict | None = None) -> dict:
     try:
         if creds is None:
             raise ValueError("creds must be provided")
-        order_data = await _get_order_data(session_id, creds)
+        order_data = await _get_order_data(session_id, creds, force_refresh=force_refresh)
         order_id = order_data.get("id", "")
 
         raw_list = _normalize_order_line_items(order_data)
