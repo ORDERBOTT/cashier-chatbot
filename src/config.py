@@ -12,6 +12,7 @@ class Config(BaseSettings):
 
     ENVIRONMENT: Environment = Environment.DEVELOPMENT
     AI_MODE: str = "chatgpt"  # "gemini" | "chatgpt"
+    VERSION: str = "unknown"
     GEMINI_MODEL: str = "gemini-2.5-flash"
     PARSING_AGENT_GEMINI_MODEL: str = "gemini-2.5-flash"
     EXECUTION_AGENT_GEMINI_MODEL: str = "gemini-2.5-flash"
