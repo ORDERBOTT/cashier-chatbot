@@ -838,11 +838,7 @@ class Orchestrator:
                     context_object=prepared_context,
                 )
                 escalated = False
-                # Informational intents must never stay in the queue as need_clarification.
-                # extract_questions_from_reply picks up "Is there anything else?" type tails
-                # which would cause the entry to persist and replay on the next turn.
-                force_done = intent_label in _INFORMATIONAL_INTENTS
-                if result.success or force_done:
+                if result.success:
                     entry["status"] = "done"
                     if entry.get("parsed_item", {}).get("Intent") == "confirm_order":
                         order_confirmed_this_turn = True
