@@ -114,34 +114,23 @@ async def prepare_clover_data(db, settings, merchant_id: str) -> dict:
         creds["base_url"] = base_url
         creds["token"] = token
         if token != old_token:
-            print(f"[prepare_clover_data] token refreshed — updating Redis merchant_id={merchant_id!r}")
+            print(f"[prepare_clover_data] token refreshed merchant_id={merchant_id!r}")
             await cache_set(redis_key, json.dumps(creds), ttl=_CLOVER_CREDS_REDIS_TTL_SECONDS)
         return creds
 
-    print(f"[prepare_clover_data] cache miss — fetching Firestore doc merchant_id={merchant_id!r}")
+    print(f"[prepare_clover_data] cache miss merchant_id={merchant_id!r}")
     snapshot = await _clover_integration_doc(db, merchant_id)
     creds = snapshot.to_dict() or {}
-    print(
-        f"[prepare_clover_data] doc exists={snapshot.exists} "
-        f"fields={list(creds.keys())} "
-        f"has_access_token={bool(creds.get('access_token'))} "
-        f"has_refresh_token={bool(creds.get('refresh_token'))} "
-        f"has_client_id={bool(creds.get('client_id'))} "
-        f"CLOVER_APP_ID_set={bool(settings.CLOVER_APP_ID)}"
-    )
     base_url = str(creds.get("api_base_url") or settings.CLOVER_API_BASE_URL).rstrip("/")
-    print(f"[prepare_clover_data] base_url={base_url!r}")
     token = await ensure_fresh_clover_access_token(
         creds,
         base_url,
         snapshot.reference,
         app_client_id=settings.CLOVER_APP_ID,
     )
-    print(f"[prepare_clover_data] token_acquired=True merchant_id={creds.get('merchant_id')!r}")
     creds["base_url"] = base_url
     creds["token"] = token
     await cache_set(redis_key, json.dumps(creds), ttl=_CLOVER_CREDS_REDIS_TTL_SECONDS)
-    print(f"[prepare_clover_data] creds cached in Redis merchant_id={merchant_id!r}")
     return creds
 
 async def _clover_integration_doc(db, user_id: str):
@@ -222,18 +211,18 @@ async def findClosestMenuItems(
         resolved_creds = creds
         if resolved_creds is None:
             raise ValueError("creds must be provided")
-        else:
-            print(
-                "[findClosestMenuItems] using provided creds "
-                f"merchant_id={resolved_creds.get('merchant_id')!r}"
-            )
 
         menu_items = await _menu_items_cached_or_fresh(resolved_creds)
-        return _find_closest_menu_items_from_menu(
+        result = _find_closest_menu_items_from_menu(
             item_name=item_name,
             details=details,
             menu_items=menu_items,
         )
+        print(
+            "[findClosestMenuItems] done "
+            f"item_name={item_name!r} match_confidence={result.get('match_confidence')!r}"
+        )
+        return result
     except Exception as exc:
         print(
             "[findClosestMenuItems] error "
@@ -295,10 +284,6 @@ def _find_closest_menu_items_from_menu(
     _no_match = {"exact_match": None, "candidates": [], "match_confidence": "none"}
     items_by_name = menu_items.get("by_name", {})
     items_name_set = set(items_by_name)
-    print(
-        "[findClosestMenuItems] menu loaded "
-        f"distinct_names={len(items_name_set)} by_id_keys={len(menu_items.get('by_id', {}))}"
-    )
 
     # Soda alias pre-processing: if the customer named a soda variant and the menu
     # has no exact match for it but does have the canonical "can of pop" item,
@@ -310,28 +295,15 @@ def _find_closest_menu_items_from_menu(
         and _get_local_item(item_name, items_by_name) is None
         and can_of_pop_in_menu
     ):
-        print(
-            f"[findClosestMenuItems] soda alias matched "
-            f"original={item_name!r} → rewriting to {_SODA_CANONICAL!r}"
-        )
         item_name = _SODA_CANONICAL
 
     exact_match = _get_local_item(item_name, items_by_name)
     top_matches = process.extract(
         item_name, items_name_set, scorer=_combined_scorer, limit=5
     )
-    preview = [(m[0], round(float(m[1]), 2)) for m in (top_matches or [])[:5]]
-    print(
-        "[findClosestMenuItems] after fuzzy extract "
-        f"exact_match_is_none={exact_match is None} top_matches_preview={preview!r}"
-    )
 
     if exact_match is not None:
         candidates = _build_candidates(top_matches, details, items_by_name)
-        print(
-            "[findClosestMenuItems] return exact "
-            f"candidate_count={len(candidates)} exact_id={exact_match.get('id')!r}"
-        )
         return {
             "exact_match": exact_match,
             "candidates": candidates,
@@ -339,7 +311,6 @@ def _find_closest_menu_items_from_menu(
         }
 
     if not top_matches or top_matches[0][1] < LOW_MENU_MATCH_THRESHOLD:
-        best_score = top_matches[0][1] if top_matches else None
         # Category fallback: try matching against category names before giving up
         items_by_category = menu_items.get("by_category", {})
         if items_by_category:
@@ -347,21 +318,12 @@ def _find_closest_menu_items_from_menu(
             if best_cat and best_cat[1] >= LOW_MENU_MATCH_THRESHOLD:
                 matched_cat = best_cat[0]
                 category_items = items_by_category[matched_cat]
-                print(
-                    "[findClosestMenuItems] return category_match "
-                    f"category={matched_cat!r} item_count={len(category_items)} score={best_cat[1]!r}"
-                )
                 return {
                     "exact_match": None,
                     "candidates": category_items,
                     "match_confidence": "category_match",
                     "matched_category": matched_cat,
                 }
-        print(
-            "[findClosestMenuItems] return none "
-            f"reason={'no_top_matches' if not top_matches else 'below_threshold'} "
-            f"best_score={best_score!r} threshold={LOW_MENU_MATCH_THRESHOLD!r}"
-        )
         return _no_match
 
     best_score = top_matches[0][1]
@@ -376,11 +338,6 @@ def _find_closest_menu_items_from_menu(
     if best_score >= CONFIRMED_THRESHOLD and (not close_competitors or verbatim_match):
         auto_exact = _get_local_item(top_name, items_by_name)
         if auto_exact is not None:
-            reason = "verbatim" if verbatim_match else "auto-confirmed"
-            print(
-                f"[findClosestMenuItems] return exact ({reason}) "
-                f"score={best_score!r} top_name={top_name!r}"
-            )
             return {
                 "exact_match": auto_exact,
                 "candidates": candidates,
@@ -417,10 +374,6 @@ def _find_closest_menu_items_from_menu(
                 all_family_members.extend(family_items)
                 display_name = _SIZE_PREFIX_RE.sub('', family_items[0].get('name', '')).strip()
                 display_types.append(display_name)
-        print(
-            "[findClosestMenuItems] return wing_type_ambiguous "
-            f"types={display_types!r} total_members={len(all_family_members)}"
-        )
         return {
             "exact_match": None,
             "candidates": all_family_members,
@@ -445,10 +398,6 @@ def _find_closest_menu_items_from_menu(
                 size_options.append(label.group(0).strip())
         size_options.sort(key=lambda x: int(x.split()[0]))
         display_base = _SIZE_PREFIX_RE.sub('', family_members[0].get('name', '')).strip() if family_members else size_family_base
-        print(
-            "[findClosestMenuItems] return size_variant "
-            f"base={display_base!r} options={size_options!r}"
-        )
         return {
             "exact_match": None,
             "candidates": family_members,
@@ -457,10 +406,6 @@ def _find_closest_menu_items_from_menu(
             "size_options": size_options,
         }
 
-    print(
-        "[findClosestMenuItems] return close "
-        f"candidate_count={len(candidates)} top_name={top_matches[0][0]!r}"
-    )
     return {"exact_match": None, "candidates": candidates, "match_confidence": "close"}
 
 
@@ -511,10 +456,6 @@ def _find_best_word_subset_match(
                 best_indices = indices
 
     if best_indices is None:
-        print(
-            "[validateRequestedItem] subset_match no subset above threshold "
-            f"item_name={item_name!r}"
-        )
         return None
 
     excluded_indices = sorted(set(range(n)) - set(best_indices))
@@ -684,29 +625,14 @@ async def check_item_availability(
         - ``Available`` False → tell the guest the item cannot be ordered and surface ``unavailableReason``.
         - ``itemName`` empty and reason is ``item not found on menu`` → refresh menu context or spelling.
     """
-    print(
-        "[check_item_availability] start "
-        f"item_id={item_id!r} merchant_id={merchant_id!r}"
-    )
     db = _firebase.firebaseDatabase
     creds = await prepare_clover_data(db, settings)
 
     menu_items = await _menu_items_cached_or_fresh(creds)
     by_id = menu_items.get("by_id", {})
-    print(
-        "[check_item_availability] menu loaded "
-        f"by_id_count={len(by_id)}"
-    )
     row = by_id.get(item_id)
-    row_name = row.get("name") if row else None
-    row_avail = row.get("available") if row else None
-    print(
-        "[check_item_availability] row lookup "
-        f"found={row is not None} name={row_name!r} available_field={row_avail!r}"
-    )
 
     if not row:
-        print("[check_item_availability] return not_found")
         return _item_not_found_result(item_id)
 
     out = _availability_result(
@@ -715,7 +641,6 @@ async def check_item_availability(
         item_name=str(row.get("name", "")),
         unavailable_reason=None,
     )
-    print(f"[check_item_availability] return available result={out!r}")
     return out
 
 
@@ -762,40 +687,20 @@ async def get_item_details(
         - ``available`` True or None → use name / price / description to answer the menu question.
         - Empty / missing values → ask the customer to clarify the item.
     """
-    print(
-        "[getItemDetails] start "
-        f"item_id={item_id!r} merchant_id={merchant_id!r}"
-    )
     db = _firebase.firebaseDatabase
     creds = await prepare_clover_data(db, settings)
-    print(
-        "[getItemDetails] after prepare_clover_data "
-        f"creds_merchant_id={creds.get('merchant_id')!r}"
-    )
 
     if merchant_id is not None and merchant_id != creds.get("merchant_id"):
-        result = {"available": False}
-        print(
-            "[getItemDetails] return merchant_mismatch "
-            f"result={result!r}"
-        )
-        return result
+        return {"available": False}
 
     menu_items = await _menu_items_cached_or_fresh(creds)
     by_id = menu_items.get("by_id", {})
-    print("[getItemDetails] menu loaded " f"by_id_count={len(by_id)}")
     row = by_id.get(item_id)
-    print(
-        "[getItemDetails] row lookup "
-        f"found={row is not None} name={(row.get('name') if row else None)!r}"
-    )
 
     if not row:
-        result = {"available": False}
-        print(f"[getItemDetails] return not_found result={result!r}")
-        return result
+        return {"available": False}
 
-    result = {
+    return {
         "id": row.get("id"),
         "name": row.get("name"),
         "description": row.get("alternateName"),
@@ -804,8 +709,6 @@ async def get_item_details(
         "categories": row.get("categories"),
         "available": row.get("available"),
     }
-    print(f"[getItemDetails] result={result!r}")
-    return result
 
 
 def _flatten_item_modifier_options(item_row: dict) -> list[dict]:
@@ -1093,35 +996,16 @@ async def validateModifications(
     if creds is None:
         db = _firebase.firebaseDatabase
         creds = await prepare_clover_data(db, settings)
-    print(
-        "[validateModifications] creds_merchant_id="
-        f"{creds.get('merchant_id')!r}"
-    )
 
     if merchantId != creds.get("merchant_id"):
-        result = _failed_modifier_validation_result(requested)
-        print(
-            "[validateModifications] return merchant_mismatch "
-            f"result={result!r}"
-        )
-        return result
+        return _failed_modifier_validation_result(requested)
 
     menu_items = await _menu_items_cached_or_fresh(creds)
-    print(
-        "[validateModifications] menu loaded "
-        f"by_id_count={len(menu_items.get('by_id', {}))}"
-    )
     item_row = menu_items.get("by_id", {}).get(itemId)
     if not item_row:
-        result = _failed_modifier_validation_result(requested)
-        print(f"[validateModifications] return item_missing result={result!r}")
-        return result
+        return _failed_modifier_validation_result(requested)
 
     flattened_options = _flatten_item_modifier_options(item_row)
-    print(
-        "[validateModifications] flattened options "
-        f"count={len(flattened_options)}"
-    )
 
     valid: list[dict] = []
     as_note: list[str] = []
@@ -1134,10 +1018,6 @@ async def validateModifications(
             opt = option_by_id_pre.get(mid)
             if opt:
                 selected_keys.add((opt["groupId"], mid))
-        print(
-            "[validateModifications] pre_populated_selected_keys "
-            f"count={len(selected_keys)}"
-        )
 
     if requested:
         unified_details = ", ".join(requested)
@@ -1145,12 +1025,6 @@ async def validateModifications(
             details=unified_details,
             item_name=str(item_row.get("name", "")).strip(),
             available_options=flattened_options,
-        )
-        print(
-            "[validateModifications] ai_resolution "
-            f"resolved_count={len(resolution.resolved)} "
-            f"as_note={resolution.as_note!r} "
-            f"unresolvable={resolution.unresolvable!r}"
         )
 
         option_by_id = {opt["modifierId"]: opt for opt in flattened_options}
@@ -1160,18 +1034,10 @@ async def validateModifications(
         for resolved_item in resolution.resolved:
             opt = option_by_id.get(resolved_item.modifierId)
             if opt is None:
-                print(
-                    "[validateModifications] ai_resolved_id_not_found "
-                    f"modifierId={resolved_item.modifierId!r} name={resolved_item.name!r}"
-                )
                 truly_invalid.append(resolved_item.name)
                 continue
             selection_key = (opt["groupId"], opt["modifierId"])
             if selection_key in selected_keys:
-                print(
-                    "[validateModifications] ai_resolved_duplicate "
-                    f"selection_key={selection_key!r}"
-                )
                 continue
             selected_keys.add(selection_key)
             valid.append(
@@ -1193,7 +1059,11 @@ async def validateModifications(
         "requireChoice": require_choice,
         "allValid": not truly_invalid and not require_choice,
     }
-    print(f"[validateModifications] result={result!r}")
+    print(
+        f"[validateModifications] done "
+        f"itemId={itemId!r} allValid={result['allValid']} "
+        f"valid_count={len(valid)} invalid_count={len(truly_invalid)}"
+    )
     return result
 
 
@@ -1226,52 +1096,27 @@ async def checkIfModifierOrAddOn(
         f"itemId={itemId!r} merchantId={merchantId!r} requested={requested!r}"
     )
     if not requested:
-        result = _modifier_or_addon_negative_result()
-        print(f"[checkIfModifierOrAddOn] return empty_request result={result!r}")
-        return result
+        return _modifier_or_addon_negative_result()
 
     db = _firebase.firebaseDatabase
     creds = await prepare_clover_data(db, settings)
-    print(
-        "[checkIfModifierOrAddOn] after prepare_clover_data "
-        f"creds_merchant_id={creds.get('merchant_id')!r}"
-    )
 
     if merchantId != creds.get("merchant_id"):
-        result = _modifier_or_addon_negative_result()
-        print(
-            "[checkIfModifierOrAddOn] return merchant_mismatch "
-            f"result={result!r}"
-        )
-        return result
+        return _modifier_or_addon_negative_result()
 
     menu_items = await _menu_items_cached_or_fresh(creds)
-    print(
-        "[checkIfModifierOrAddOn] menu loaded "
-        f"by_id_count={len(menu_items.get('by_id', {}))}"
-    )
     item_row = menu_items.get("by_id", {}).get(itemId)
     if not item_row:
-        result = _modifier_or_addon_negative_result()
-        print(f"[checkIfModifierOrAddOn] return item_missing result={result!r}")
-        return result
+        return _modifier_or_addon_negative_result()
 
     modifier_groups = _item_modifier_groups(item_row)
     flattened_options = _flatten_item_modifier_options(item_row)
     if not flattened_options:
-        result = _modifier_or_addon_negative_result()
-        print(f"[checkIfModifierOrAddOn] return no_options result={result!r}")
-        return result
+        return _modifier_or_addon_negative_result()
 
     candidates = _modifier_or_addon_candidates(requested, flattened_options)
-    print(
-        "[checkIfModifierOrAddOn] candidate search "
-        f"candidate_count={len(candidates)}"
-    )
     if not candidates:
-        result = _modifier_or_addon_negative_result()
-        print(f"[checkIfModifierOrAddOn] return no_candidates result={result!r}")
-        return result
+        return _modifier_or_addon_negative_result()
 
     try:
         classification_result = await classify_modifier_or_addon_request(
@@ -1289,7 +1134,10 @@ async def checkIfModifierOrAddOn(
         requested,
         flattened_options,
     )
-    print(f"[checkIfModifierOrAddOn] result={result!r}")
+    print(
+        f"[checkIfModifierOrAddOn] done "
+        f"itemId={itemId!r} isAddon={result.get('isAddon')} classification={result.get('classification')!r}"
+    )
     return result
 
 
@@ -1489,17 +1337,8 @@ async def validateRequestedItem(
         resolved_creds = creds
         if resolved_creds is None:
             raise ValueError("creds must be provided")
-        else:
-            print(
-                "[validateRequestedItem] using provided creds "
-                f"merchant_id={resolved_creds.get('merchant_id')!r}"
-            )
 
         menu_items = await _menu_items_cached_or_fresh(resolved_creds)
-        print(
-            "[validateRequestedItem] menu loaded "
-            f"by_id_count={len(menu_items.get('by_id', {}))}"
-        )
 
         match_result = _find_closest_menu_items_from_menu(
             item_name=itemName,
@@ -1511,9 +1350,8 @@ async def validateRequestedItem(
         match_confidence = match_result.get("match_confidence", "none")
         print(
             "[validateRequestedItem] match result "
-            f"matchConfidence={match_confidence!r} "
-            f"exactMatch_id={(exact_match.get('id') if exact_match else None)!r} "
-            f"candidate_count={len(candidates)}"
+            f"itemName={itemName!r} matchConfidence={match_confidence!r} "
+            f"exactMatch_id={(exact_match.get('id') if exact_match else None)!r}"
         )
 
         # When the full query returns "none", modifier words embedded anywhere
@@ -1529,11 +1367,6 @@ async def validateRequestedItem(
                 exact_match = match_result.get("exact_match")
                 candidates = match_result.get("candidates", [])
                 match_confidence = match_result.get("match_confidence", "none")
-                print(
-                    "[validateRequestedItem] subset_match applied "
-                    f"matchConfidence={match_confidence!r} "
-                    f"exactMatch_id={(exact_match.get('id') if exact_match else None)!r}"
-                )
 
         base = {
             "exactMatch": exact_match,
@@ -1542,10 +1375,6 @@ async def validateRequestedItem(
         }
 
         if match_confidence != "exact":
-            print(
-                "[validateRequestedItem] return early "
-                f"matchConfidence={match_confidence!r}"
-            )
             # Forward any extra fields from match_result (wing_types, size_options,
             # size_family_base, matched_category) so the agent can read them directly.
             extra_fields = {
@@ -1564,13 +1393,8 @@ async def validateRequestedItem(
         item_row = by_id.get(item_id) or exact_match
 
         available = bool(item_row.get("available", True))
-        print(
-            "[validateRequestedItem] availability check "
-            f"itemId={item_id!r} available={available!r}"
-        )
 
         if not available:
-            print("[validateRequestedItem] return unavailable")
             return {
                 **base,
                 "itemId": item_id,
@@ -1588,10 +1412,6 @@ async def validateRequestedItem(
 
         # --- available; validate modifiers ---
         flattened_options = _flatten_item_modifier_options(item_row)
-        print(
-            "[validateRequestedItem] flattened_options "
-            f"count={len(flattened_options)}"
-        )
 
         # Compute leftover words first — words in itemName that are not part of the
         # matched menu item name and may carry modifier intent (e.g. "spicy" in
@@ -1599,10 +1419,6 @@ async def validateRequestedItem(
         # merged into a single resolver call.
         matched_name_words = set(str(item_row.get("name", "")).strip().lower().split())
         leftover_words = [w for w in itemName.lower().split() if w not in matched_name_words]
-        print(
-            "[validateRequestedItem] leftover_words "
-            f"leftover={leftover_words!r}"
-        )
 
         # Build unified details: explicit details + leftover words → one resolver pass.
         parts: list[str] = []
@@ -1618,12 +1434,6 @@ async def validateRequestedItem(
                 item_name=str(item_row.get("name", "")).strip(),
                 available_options=flattened_options,
             )
-            print(
-                "[validateRequestedItem] ai_resolution "
-                f"resolved_count={len(resolution.resolved)} "
-                f"as_note={resolution.as_note!r} "
-                f"unresolvable={resolution.unresolvable!r}"
-            )
 
             option_by_id = {opt["modifierId"]: opt for opt in flattened_options}
             valid: list[dict] = []
@@ -1634,18 +1444,10 @@ async def validateRequestedItem(
             for resolved_item in resolution.resolved:
                 opt = option_by_id.get(resolved_item.modifierId)
                 if opt is None:
-                    print(
-                        "[validateRequestedItem] ai_resolved_id_not_found "
-                        f"modifierId={resolved_item.modifierId!r} name={resolved_item.name!r}"
-                    )
                     truly_invalid.append(resolved_item.name)
                     continue
                 selection_key = (opt["groupId"], opt["modifierId"])
                 if selection_key in selected_keys:
-                    print(
-                        "[validateRequestedItem] ai_resolved_duplicate "
-                        f"selection_key={selection_key!r}"
-                    )
                     continue
                 selected_keys.add(selection_key)
                 valid.append(
@@ -1680,7 +1482,11 @@ async def validateRequestedItem(
             "classification": None,
             "closestModifier": None,
         }
-        print(f"[validateRequestedItem] result={result!r}")
+        print(
+            f"[validateRequestedItem] done "
+            f"itemId={item_id!r} allValid={all_valid} "
+            f"valid_count={len(valid)} invalid_count={len(truly_invalid)}"
+        )
         return result
 
     except Exception as exc:
@@ -1749,18 +1555,13 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
         - ``failedItems[].reason`` contains "not found" → item is not on the menu; suggest alternatives.
         - ``failedItems[].reason`` contains "modifier before" → modifiers must follow an item spec.
     """
-    print(f"[addItemsToOrder] session_id={session_id!r} items={items}")
+    print(f"[addItemsToOrder] start session_id={session_id!r} item_count={len(items or [])}")
     if creds is None:
         raise ValueError("creds must be provided")
-    print(
-        f"[addItemsToOrder] merchant_id={creds.get('merchant_id')!r} base_url={creds.get('base_url')!r}"
-    )
 
     order_id = await get_order_id_for_session(session_id, creds)
-    print(f"[addItemsToOrder] order_id={order_id!r}")
 
     if not items:
-        print("[addItemsToOrder] no items — returning early")
         return {
             "success": True,
             "addedItems": [],
@@ -1771,9 +1572,6 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
     menu = await _menu_items_cached_or_fresh(creds)
     by_id = menu.get("by_id", {})
     by_modifier_id = menu.get("by_modifier_id", {})
-    print(
-        f"[addItemsToOrder] menu loaded: {len(by_id)} items, {len(by_modifier_id)} modifier ids indexed"
-    )
 
     added_items: list[dict] = []
     failed_items: list[dict] = []
@@ -1784,18 +1582,12 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
         quantity = spec.get("quantity") or 1
         modifiers: list[str] = spec.get("modifiers") or []
         note: str | None = spec.get("note")
-        print(
-            f"[addItemsToOrder] spec[{i}]: itemId={item_id!r} qty={quantity} modifiers={modifiers} note={note!r}"
-        )
 
         in_by_id = item_id in by_id
         in_by_modifier_id = item_id in by_modifier_id
 
         # AMBIGUITY CHECK
         if in_by_id and in_by_modifier_id:
-            print(
-                f"[addItemsToOrder] AMBIGUOUS: {item_id!r} found in both by_id and by_modifier_id"
-            )
             failed_items.append(
                 {
                     "itemId": item_id,
@@ -1806,13 +1598,7 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
 
         # MODIFIER PATH
         if not in_by_id and in_by_modifier_id:
-            print(
-                f"[addItemsToOrder] MODIFIER PATH: {item_id!r} → attaching to line_item={last_added_line_item_id!r}"
-            )
             if last_added_line_item_id is None:
-                print(
-                    f"[addItemsToOrder] FAIL: modifier {item_id!r} has no preceding line item"
-                )
                 failed_items.append(
                     {
                         "itemId": item_id,
@@ -1829,19 +1615,14 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
                     last_added_line_item_id,
                     item_id,
                 )
-                print(
-                    f"[addItemsToOrder] modifier {item_id!r} applied to line {last_added_line_item_id!r}"
-                )
                 if added_items:
                     added_items[-1]["modifiersApplied"].append(item_id)
             except Exception as exc:
-                print(f"[addItemsToOrder] modifier {item_id!r} failed: {exc!r}")
                 failed_items.append({"itemId": item_id, "reason": str(exc)})
             continue
 
         # UNKNOWN ITEM
         if not in_by_id and not in_by_modifier_id:
-            print(f"[addItemsToOrder] UNKNOWN: {item_id!r} not found in menu")
             failed_items.append(
                 {
                     "itemId": item_id,
@@ -1853,9 +1634,6 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
         # NORMAL PATH
         item_row = by_id[item_id]
         item_price: int = item_row.get("price") or 0
-        print(
-            f"[addItemsToOrder] NORMAL PATH: adding {item_id!r} qty={quantity} price={item_price} to order {order_id!r}"
-        )
         try:
             for _ in range(quantity):
                 response = await add_clover_line_item(
@@ -1869,9 +1647,6 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
                     item_price,
                 )
                 line_item_id = response["id"]
-                print(
-                    f"[addItemsToOrder] line item created: line_item_id={line_item_id!r} price={response.get('price')}"
-                )
                 modifiers_applied: list[str] = []
 
                 for mod_id in modifiers:
@@ -1884,14 +1659,8 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
                             line_item_id,
                             mod_id,
                         )
-                        print(
-                            f"[addItemsToOrder] modifier {mod_id!r} applied to line {line_item_id!r}"
-                        )
                         modifiers_applied.append(mod_id)
                     except Exception as exc:
-                        print(
-                            f"[addItemsToOrder] modifier {mod_id!r} on line {line_item_id!r} failed: {exc!r}"
-                        )
                         failed_items.append({"itemId": mod_id, "reason": str(exc)})
 
                 added_items.append(
@@ -1907,18 +1676,12 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
                 last_added_line_item_id = line_item_id
 
         except Exception as exc:
-            print(f"[addItemsToOrder] item {item_id!r} failed: {exc!r}")
             failed_items.append({"itemId": item_id, "reason": str(exc)})
-
-    print(
-        f"[addItemsToOrder] loop done: {len(added_items)} added, {len(failed_items)} failed"
-    )
 
     updated_total = 0
     try:
         order_data = await _get_order_data(session_id, creds, force_refresh=True)
         updated_total = order_data.get("total", 0) or 0
-        print(f"[addItemsToOrder] updated order total: {updated_total} cents")
     except Exception as exc:
         print(f"[addItemsToOrder] fetch order data failed: {exc!r}")
 
@@ -1928,7 +1691,10 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
         "failedItems": failed_items,
         "updatedOrderTotal": updated_total,
     }
-    print(f"[addItemsToOrder] result: {result}")
+    print(
+        f"[addItemsToOrder] done added={len(added_items)} failed={len(failed_items)} "
+        f"total_cents={updated_total} success={result['success']}"
+    )
     return result
 
 
@@ -2005,19 +1771,16 @@ async def replaceItemInOrder(
         - ``success`` False, other errors → surface ``error`` to the customer.
     """
     print(
-        f"[replaceItemInOrder] session_id={session_id!r} lineItemId={lineItemId!r} orderPosition={orderPosition!r} itemName={itemName!r} replacement={replacement}"
+        f"[replaceItemInOrder] start session_id={session_id!r} "
+        f"lineItemId={lineItemId!r} orderPosition={orderPosition!r} itemName={itemName!r}"
     )
     if creds is None:
         raise ValueError("creds must be provided")
 
     order_id = await get_order_id_for_session(session_id, creds)
-    print(f"[replaceItemInOrder] order_id={order_id!r}")
 
     # Fetch current order to resolve target
     order_data = await _get_order_data(session_id, creds)
-    print(
-        f"[replaceItemInOrder] raw order_data keys: {list(order_data.keys())}, lineItems type: {type(order_data.get('lineItems'))!r}"
-    )
     raw_line_items = order_data.get("lineItems") or []
     if isinstance(raw_line_items, dict):
         line_items: list[dict] = raw_line_items.get("elements", [])
@@ -2025,9 +1788,6 @@ async def replaceItemInOrder(
         line_items = raw_line_items
     else:
         line_items = []
-    print(
-        f"[replaceItemInOrder] current line items: {[li.get('id') for li in line_items]}"
-    )
 
     # --- Target resolution ---
     target_line_item_id: str | None = None
@@ -2138,7 +1898,6 @@ async def replaceItemInOrder(
     replacement_price: int = replacement_item_row.get("price") or 0
 
     # --- Delete target line item ---
-    print(f"[replaceItemInOrder] deleting line item {target_line_item_id!r}")
     try:
         await delete_clover_line_item(
             creds["token"],
@@ -2148,7 +1907,6 @@ async def replaceItemInOrder(
             target_line_item_id,
         )
     except Exception as exc:
-        print(f"[replaceItemInOrder] delete failed: {exc!r}")
         return {
             "success": False,
             "removedItem": None,
@@ -2160,9 +1918,6 @@ async def replaceItemInOrder(
     removed_item_info = {"name": removed_name, "quantity": removed_quantity}
 
     # --- Add replacement ---
-    print(
-        f"[replaceItemInOrder] adding replacement {replacement_item_id!r} qty={replacement_quantity}"
-    )
     try:
         add_response = await add_clover_line_item(
             creds["token"],
@@ -2189,7 +1944,7 @@ async def replaceItemInOrder(
                 )
                 modifiers_applied.append(mod_id)
             except Exception as exc:
-                print(f"[replaceItemInOrder] modifier {mod_id!r} failed: {exc!r}")
+                pass  # modifier failure is non-fatal; item still added
 
         added_item_info = {
             "name": replacement_item_row.get("name", ""),
@@ -2199,9 +1954,6 @@ async def replaceItemInOrder(
         }
 
     except Exception as exc:
-        print(
-            f"[replaceItemInOrder] add replacement failed: {exc!r}; attempting rollback"
-        )
         # Best-effort rollback: re-add the original item
         try:
             original_item_id = (
@@ -2218,15 +1970,8 @@ async def replaceItemInOrder(
                     None,
                     None,
                 )
-                print(
-                    f"[replaceItemInOrder] rollback succeeded: re-added {original_item_id!r}"
-                )
-            else:
-                print(
-                    "[replaceItemInOrder] rollback skipped: no original item id available"
-                )
-        except Exception as rb_exc:
-            print(f"[replaceItemInOrder] rollback also failed: {rb_exc!r}")
+        except Exception:
+            pass  # rollback also failed; order may be in partial state
 
         return {
             "success": False,
@@ -2241,7 +1986,6 @@ async def replaceItemInOrder(
     try:
         updated_order = await _get_order_data(session_id, creds, force_refresh=True)
         updated_total = updated_order.get("total", 0) or 0
-        print(f"[replaceItemInOrder] updated order total: {updated_total} cents")
     except Exception as exc:
         print(f"[replaceItemInOrder] fetch order data failed: {exc!r}")
 
@@ -2252,7 +1996,10 @@ async def replaceItemInOrder(
         "updatedOrderTotal": updated_total,
         "error": None,
     }
-    print(f"[replaceItemInOrder] result: {result}")
+    print(
+        f"[replaceItemInOrder] done removed={removed_name!r} "
+        f"added={added_item_info.get('name')!r} total_cents={updated_total}"
+    )
     return result
 
 
@@ -2314,7 +2061,7 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
         - ``error`` contains "must provide" → target dict is missing both keys.
         - Other errors → surface ``error`` to the customer.
     """
-    print(f"[removeItemFromOrder] session_id={session_id!r} target={target}")
+    print(f"[removeItemFromOrder] start session_id={session_id!r} target={target}")
 
     order_position = target.get("orderPosition")
     item_name = target.get("itemName")
@@ -2334,12 +2081,8 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
         raise ValueError("creds must be provided")
 
     order_id = await get_order_id_for_session(session_id, creds)
-    print(f"[removeItemFromOrder] order_id={order_id!r}")
 
     order_data = await _get_order_data(session_id, creds)
-    print(
-        f"[removeItemFromOrder] raw order_data keys: {list(order_data.keys())}, lineItems type: {type(order_data.get('lineItems'))!r}"
-    )
     raw_line_items = order_data.get("lineItems") or []
     if isinstance(raw_line_items, dict):
         line_items: list[dict] = raw_line_items.get("elements", [])
@@ -2347,9 +2090,6 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
         line_items = raw_line_items
     else:
         line_items = []
-    print(
-        f"[removeItemFromOrder] current line items: {[li.get('id') for li in line_items]}"
-    )
 
     # --- Target resolution ---
     target_line_item_id: str | None = None
@@ -2374,7 +2114,6 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
         removed_quantity = max(1, (match.get("unitQty") or 1000) // 1000)
 
         # --- Delete single item (orderPosition path) ---
-        print(f"[removeItemFromOrder] deleting line item {target_line_item_id!r}")
         try:
             await delete_clover_line_item(
                 creds["token"],
@@ -2384,7 +2123,6 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
                 target_line_item_id,
             )
         except Exception as exc:
-            print(f"[removeItemFromOrder] delete failed: {exc!r}")
             return {
                 "success": False,
                 "removedItem": None,
@@ -2400,7 +2138,6 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
         try:
             updated_order = await _get_order_data(session_id, creds, force_refresh=True)
             updated_total = updated_order.get("total", 0) or 0
-            print(f"[removeItemFromOrder] updated order total: {updated_total} cents")
         except Exception as exc:
             print(f"[removeItemFromOrder] fetch order data failed: {exc!r}")
 
@@ -2413,7 +2150,10 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
             "updatedOrderTotal": updated_total,
             "error": None,
         }
-        print(f"[removeItemFromOrder] result: {result}")
+        print(
+            f"[removeItemFromOrder] done removed={item_display_name!r} "
+            f"count=1 total_cents={updated_total}"
+        )
         return result
 
     else:
@@ -2468,7 +2208,6 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
         removed_count = 0
         for li in items_to_delete:
             li_id = li.get("id", "")
-            print(f"[removeItemFromOrder] deleting line item {li_id!r}")
             try:
                 await delete_clover_line_item(
                     creds["token"],
@@ -2478,8 +2217,8 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
                     li_id,
                 )
                 removed_count += 1
-            except Exception as exc:
-                print(f"[removeItemFromOrder] delete failed for {li_id!r}: {exc!r}")
+            except Exception:
+                pass
 
         if removed_count == 0:
             return {
@@ -2497,7 +2236,6 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
         try:
             updated_order = await _get_order_data(session_id, creds, force_refresh=True)
             updated_total = updated_order.get("total", 0) or 0
-            print(f"[removeItemFromOrder] updated order total: {updated_total} cents")
         except Exception as exc:
             print(f"[removeItemFromOrder] fetch order data failed: {exc!r}")
 
@@ -2510,7 +2248,10 @@ async def removeItemFromOrder(session_id: str, target: dict, creds: dict | None 
             "updatedOrderTotal": updated_total,
             "error": None,
         }
-        print(f"[removeItemFromOrder] result: {result}")
+        print(
+            f"[removeItemFromOrder] done removed={item_display_name!r} "
+            f"count={removed_count} total_cents={updated_total}"
+        )
         return result
 
 
@@ -2551,7 +2292,7 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
             Human-readable error message when ``success`` is False; None on success.
     """
     print(
-        f"[changeItemQuantity] session_id={session_id!r} target={target} newQuantity={newQuantity!r}"
+        f"[changeItemQuantity] start session_id={session_id!r} target={target} newQuantity={newQuantity!r}"
     )
 
     target_line_item_id = target.get("lineitemId") or target.get("lineItemId")
@@ -2572,16 +2313,9 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
         raise ValueError("creds must be provided")
 
     order_id = await get_order_id_for_session(session_id, creds)
-    print(f"[changeItemQuantity] order_id={order_id!r}")
 
     order_data = await _get_order_data(session_id, creds)
-    print(
-        f"[changeItemQuantity] raw order_data keys: {list(order_data.keys())}, lineItems type: {type(order_data.get('lineItems'))!r}"
-    )
     line_items = _normalize_order_line_items(order_data)
-    print(
-        f"[changeItemQuantity] current line items: {[li.get('id') for li in line_items]}"
-    )
 
     matched_line_item: dict | None = None
 
@@ -2683,7 +2417,6 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
             "updatedOrderTotal": current_total,
             "error": None,
         }
-        print(f"[changeItemQuantity] no-op result: {result}")
         return result
 
     item_id = matched_line_item.get("item", {}).get("id", "")
@@ -2691,7 +2424,6 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
 
     if newQuantity > previous_quantity:
         to_add = newQuantity - previous_quantity
-        print(f"[changeItemQuantity] adding {to_add} line item(s) for {matched_name!r}")
         try:
             for _ in range(to_add):
                 response = await add_clover_line_item(
@@ -2705,7 +2437,6 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
                         order_id, new_line_item_id, mod_id
                     )
         except Exception as exc:
-            print(f"[changeItemQuantity] add failed: {exc!r}")
             return {
                 "success": False,
                 "itemName": matched_name,
@@ -2716,7 +2447,6 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
             }
     else:
         to_delete = previous_quantity - newQuantity
-        print(f"[changeItemQuantity] deleting {to_delete} line item(s) for {matched_name!r}")
         try:
             for li in same_name_items[:to_delete]:
                 await delete_clover_line_item(
@@ -2724,7 +2454,6 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
                     order_id, li["id"]
                 )
         except Exception as exc:
-            print(f"[changeItemQuantity] delete failed: {exc!r}")
             return {
                 "success": False,
                 "itemName": matched_name,
@@ -2738,7 +2467,6 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
     try:
         updated_order = await _get_order_data(session_id, creds, force_refresh=True)
         updated_total = updated_order.get("total", 0) or 0
-        print(f"[changeItemQuantity] updated order total: {updated_total} cents")
     except Exception as exc:
         print(f"[changeItemQuantity] fetch order data failed: {exc!r}")
 
@@ -2750,7 +2478,10 @@ async def changeItemQuantity(session_id: str, target: dict, newQuantity: int, cr
         "updatedOrderTotal": updated_total,
         "error": None,
     }
-    print(f"[changeItemQuantity] result: {result}")
+    print(
+        f"[changeItemQuantity] done item={matched_name!r} "
+        f"prev={previous_quantity} new={newQuantity} total_cents={updated_total}"
+    )
     return result
 
 
@@ -2794,7 +2525,7 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds:
         - ``success`` False with modifier / note mutation errors → surface the error and avoid assuming the change succeeded.
     """
     print(
-        f"[updateItemInOrder] session_id={session_id!r} target={target} updates={updates}"
+        f"[updateItemInOrder] start session_id={session_id!r} target={target} updates={updates}"
     )
 
     target_line_item_id = target.get("lineitemId") or target.get("lineItemId")
@@ -2843,16 +2574,9 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds:
         raise ValueError("creds must be provided")
 
     order_id = await get_order_id_for_session(session_id, creds)
-    print(f"[updateItemInOrder] order_id={order_id!r}")
 
     order_data = await _get_order_data(session_id, creds)
-    print(
-        f"[updateItemInOrder] raw order_data keys: {list(order_data.keys())}, lineItems type: {type(order_data.get('lineItems'))!r}"
-    )
     line_items = _normalize_order_line_items(order_data)
-    print(
-        f"[updateItemInOrder] current line items: {[li.get('id') for li in line_items]}"
-    )
 
     matched_line_item: dict | None = None
 
@@ -2960,10 +2684,6 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds:
     added_count = 0
 
     for record in modifiers_to_remove:
-        print(
-            "[updateItemInOrder] removing modification "
-            f"{record['modification_id']!r} (modifier {record['modifier_id']!r})"
-        )
         try:
             await delete_clover_modification(
                 creds["token"],
@@ -2975,7 +2695,6 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds:
             )
             removed_count += 1
         except Exception as exc:
-            print(f"[updateItemInOrder] remove modifier failed: {exc!r}")
             return {
                 "success": False,
                 "itemName": matched_name,
@@ -2989,7 +2708,6 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds:
             }
 
     for modifier_id in modifiers_to_add:
-        print(f"[updateItemInOrder] adding modifier {modifier_id!r}")
         try:
             await add_clover_modification(
                 creds["token"],
@@ -3001,7 +2719,6 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds:
             )
             added_count += 1
         except Exception as exc:
-            print(f"[updateItemInOrder] add modifier failed: {exc!r}")
             return {
                 "success": False,
                 "itemName": matched_name,
@@ -3017,7 +2734,6 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds:
     note_action: str | None = None
     if note_changed:
         note_action = "cleared note" if note_value is None else "updated note"
-        print(f"[updateItemInOrder] updating note to {note_value!r}")
         try:
             await update_clover_line_item(
                 creds["token"],
@@ -3028,7 +2744,6 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds:
                 note=note_value,
             )
         except Exception as exc:
-            print(f"[updateItemInOrder] update note failed: {exc!r}")
             return {
                 "success": False,
                 "itemName": matched_name,
@@ -3045,7 +2760,6 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds:
     try:
         updated_order = await _get_order_data(session_id, creds, force_refresh=True)
         updated_total = updated_order.get("total", 0) or 0
-        print(f"[updateItemInOrder] updated order total: {updated_total} cents")
     except Exception as exc:
         print(f"[updateItemInOrder] fetch order data failed: {exc!r}")
 
@@ -3060,7 +2774,10 @@ async def updateItemInOrder(session_id: str, target: dict, updates: dict, creds:
         "updatedOrderTotal": updated_total,
         "error": None,
     }
-    print(f"[updateItemInOrder] result: {result}")
+    print(
+        f"[updateItemInOrder] done item={matched_name!r} "
+        f"added={added_count} removed={removed_count} total_cents={updated_total}"
+    )
     return result
 
 
@@ -3097,11 +2814,11 @@ async def calcOrderPrice(session_id: str, creds: dict | None = None) -> dict:
         - ``success`` True → use the totals as the source of truth for confirmation or price replies.
         - ``success`` False → tell the customer pricing could not be calculated right now.
     """
-    print(f"[calcOrderPrice] session_id={session_id!r}")
+    print(f"[calcOrderPrice] start session_id={session_id!r}")
 
     order_id = await cache_get(_session_clover_order_redis_key(session_id))
     if not order_id:
-        result = {
+        return {
             "success": True,
             "lineItems": [],
             "subtotal": 0,
@@ -3110,17 +2827,12 @@ async def calcOrderPrice(session_id: str, creds: dict | None = None) -> dict:
             "currency": "USD",
             "error": None,
         }
-        print(f"[calcOrderPrice] no cached order id; result={result}")
-        return result
 
     try:
         if creds is None:
             raise ValueError("creds must be provided")
-        print(f"[calcOrderPrice] order_id={order_id!r}")
 
         order_data = await _get_order_data(session_id, creds)
-        print(f"[calcOrderPrice] raw order_data keys: {list(order_data.keys())}")
-
         breakdown = _pricing_breakdown_from_order(order_data)
         result = {
             "success": True,
@@ -3131,7 +2843,7 @@ async def calcOrderPrice(session_id: str, creds: dict | None = None) -> dict:
             "currency": breakdown["currency"],
             "error": None,
         }
-        print(f"[calcOrderPrice] result={result}")
+        print(f"[calcOrderPrice] done total_cents={breakdown['total']}")
         return result
     except Exception as exc:
         print(f"[calcOrderPrice] error: {exc!r}")
@@ -3148,11 +2860,11 @@ async def calcOrderPrice(session_id: str, creds: dict | None = None) -> dict:
 
 async def confirmOrder(session_id: str, creds: dict | None = None) -> dict:
     """Submit the current Clover order and mark the chat session as confirmed."""
-    print(f"[confirmOrder] session_id={session_id!r}")
+    print(f"[confirmOrder] start session_id={session_id!r}")
 
     order_id = await cache_get(_session_clover_order_redis_key(session_id))
     if not order_id:
-        result = {
+        return {
             "success": False,
             "orderId": "",
             "confirmedItems": [],
@@ -3160,24 +2872,18 @@ async def confirmOrder(session_id: str, creds: dict | None = None) -> dict:
             "estimatedPickuptime": None,
             "error": "order is empty",
         }
-        print(f"[confirmOrder] no cached order id; result={result}")
-        return result
 
     try:
         if creds is None:
             raise ValueError("creds must be provided")
-        print(f"[confirmOrder] order_id={order_id!r}")
 
         current_order = await fetch_clover_order(
             creds["token"], creds["merchant_id"], creds["base_url"], order_id
         )
         current_line_items = _normalize_order_line_items(current_order)
-        print(
-            f"[confirmOrder] current line items: {[li.get('id') for li in current_line_items]}"
-        )
 
         if not current_line_items:
-            result = {
+            return {
                 "success": False,
                 "orderId": order_id,
                 "confirmedItems": [],
@@ -3185,8 +2891,6 @@ async def confirmOrder(session_id: str, creds: dict | None = None) -> dict:
                 "estimatedPickuptime": None,
                 "error": "order is empty",
             }
-            print(f"[confirmOrder] empty order; result={result}")
-            return result
 
         await update_clover_order(
             creds["token"],
@@ -3225,7 +2929,7 @@ async def confirmOrder(session_id: str, creds: dict | None = None) -> dict:
             "estimatedPickuptime": _DEFAULT_PICKUP_MINUTES,
             "error": None,
         }
-        print(f"[confirmOrder] result={result}")
+        print(f"[confirmOrder] done item_count={len(confirmed_items)} total={breakdown['total']}")
         return result
     except Exception as exc:
         print(f"[confirmOrder] error: {exc!r}")
@@ -3241,31 +2945,26 @@ async def confirmOrder(session_id: str, creds: dict | None = None) -> dict:
 
 async def cancelOrder(session_id: str, creds: dict | None = None) -> dict:
     """Cancel an unconfirmed Clover order and clear session order state."""
-    print(f"[cancelOrder] session_id={session_id!r}")
+    print(f"[cancelOrder] start session_id={session_id!r}")
 
     session_status = await cache_get(_session_status_redis_key(session_id))
     order_id = await cache_get(_session_clover_order_redis_key(session_id))
-    print(f"[cancelOrder] session_status={session_status!r} order_id={order_id!r}")
 
     if session_status == "confirmed":
-        result = {
+        return {
             "success": False,
             "cancelledOrderId": order_id or None,
             "hadItems": False,
             "error": "order already confirmed and submitted",
         }
-        print(f"[cancelOrder] confirmed session; result={result}")
-        return result
 
     if not order_id:
-        result = {
+        return {
             "success": True,
             "cancelledOrderId": None,
             "hadItems": False,
             "error": None,
         }
-        print(f"[cancelOrder] no order id; result={result}")
-        return result
 
     try:
         if creds is None:
@@ -3277,14 +2976,10 @@ async def cancelOrder(session_id: str, creds: dict | None = None) -> dict:
                 creds["token"], creds["merchant_id"], creds["base_url"], order_id
             )
             had_items = bool(_normalize_order_line_items(order_data))
-            print(f"[cancelOrder] had_items={had_items}")
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code if exc.response is not None else None
             if status_code != 404:
                 raise
-            print(
-                "[cancelOrder] pre-delete fetch returned 404; continuing with had_items=False"
-            )
 
         try:
             await delete_clover_order(
@@ -3294,7 +2989,6 @@ async def cancelOrder(session_id: str, creds: dict | None = None) -> dict:
             status_code = exc.response.status_code if exc.response is not None else None
             if status_code != 404:
                 raise
-            print("[cancelOrder] delete returned 404; treating as already gone")
 
         await cache_delete(_session_order_state_redis_key(session_id))
         await cache_delete(_session_clover_order_redis_key(session_id))
@@ -3307,7 +3001,7 @@ async def cancelOrder(session_id: str, creds: dict | None = None) -> dict:
             "hadItems": had_items,
             "error": None,
         }
-        print(f"[cancelOrder] result={result}")
+        print(f"[cancelOrder] done success=True hadItems={had_items}")
         return result
     except Exception as exc:
         print(f"[cancelOrder] error: {exc!r}")
@@ -3356,14 +3050,12 @@ async def getOrderLineItems(session_id: str, creds: dict | None = None) -> dict:
     - success True  → use lineItems to inform the next action or answer the customer.
     - success False → surface error to the customer and do not proceed with order mutations.
     """
-    print(f"[getOrderLineItems] session_id={session_id!r}")
+    print(f"[getOrderLineItems] start session_id={session_id!r}")
     try:
         if creds is None:
             raise ValueError("creds must be provided")
         order_data = await _get_order_data(session_id, creds)
         order_id = order_data.get("id", "")
-        print(f"[getOrderLineItems] order_id={order_id!r}")
-        print(f"[getOrderLineItems] raw order_data keys: {list(order_data.keys())}")
 
         raw_list = _normalize_order_line_items(order_data)
 
@@ -3383,7 +3075,7 @@ async def getOrderLineItems(session_id: str, creds: dict | None = None) -> dict:
         ]
 
         order_total: int = order_data.get("total", 0) or 0
-        print(f"[getOrderLineItems] line_items={line_items}, orderTotal={order_total}")
+        print(f"[getOrderLineItems] done item_count={len(line_items)} orderTotal={order_total}")
         return {
             "success": True,
             "orderId": order_id,
@@ -3410,7 +3102,6 @@ async def getPreviousKMessages(session_id: str, k: int | None = None) -> dict:
     Stored ``user``/``assistant`` roles are normalized to ``customer``/``agent``.
     Unsupported roles such as ``system`` are ignored in the returned message list.
     """
-    print(f"[getPreviousKMessages] session_id={session_id!r} k={k!r}")
     try:
         resolved_k = settings.DEFAULT_PREVIOUS_MESSAGES_K if k is None else k
         if resolved_k < -1:
@@ -3442,12 +3133,6 @@ async def getPreviousKMessages(session_id: str, k: int | None = None) -> dict:
 
         fetched_window_size = len(raw_messages)
         has_earlier_history = total_message_count > fetched_window_size
-        print(
-            "[getPreviousKMessages] "
-            f"total_message_count={total_message_count} "
-            f"returned_messages={len(messages)} "
-            f"has_earlier_history={has_earlier_history}"
-        )
         return {
             "success": True,
             "messages": messages,
@@ -3456,7 +3141,6 @@ async def getPreviousKMessages(session_id: str, k: int | None = None) -> dict:
             "error": None,
         }
     except Exception as exc:
-        print(f"[getPreviousKMessages] error: {exc!r}")
         return {
             "success": False,
             "messages": [],
@@ -3468,7 +3152,6 @@ async def getPreviousKMessages(session_id: str, k: int | None = None) -> dict:
 
 async def summarizeConversationHistory(session_id: str, k: int) -> dict:
     """Summarize all stored session messages before the last ``k`` raw Redis entries."""
-    print(f"[summarizeConversationHistory] session_id={session_id!r} k={k!r}")
     try:
         if k < 0:
             raise ValueError("k must be a non-negative integer")
@@ -3500,11 +3183,8 @@ async def summarizeConversationHistory(session_id: str, k: int) -> dict:
                         "cachedAt": parsed_cached_summary["cachedAt"],
                         "error": None,
                     }
-            except ValueError as exc:
-                print(
-                    "[summarizeConversationHistory] "
-                    f"ignoring invalid cached summary: {exc!r}"
-                )
+            except ValueError:
+                pass  # invalid cached summary; fall through to regenerate
 
         raw_messages = await cache_list_range(redis_key, 0, -1)
         raw_history = raw_messages[:-k] if k > 0 else raw_messages
@@ -3534,7 +3214,6 @@ async def summarizeConversationHistory(session_id: str, k: int) -> dict:
             "error": None,
         }
     except Exception as exc:
-        print(f"[summarizeConversationHistory] error: {exc!r}")
         return {
             "success": False,
             "summary": "",
@@ -3597,7 +3276,8 @@ async def getMenuLink(session_id: str, merchant_id: str, creds: dict | None = No
         - ``success`` False → inform customer that a menu link is not available.
     """
     menu_url = "https://www.smashnwings.com/menu"
-    print(f"[getMenuLink] session_id={session_id!r} merchant_id={merchant_id!r} menu_url={menu_url!r}")
+    print(f"[getMenuLink] start session_id={session_id!r} merchant_id={merchant_id!r}")
+    print(f"[getMenuLink] done menu_url={menu_url!r}")
     return {"success": True, "menu_url": menu_url, "error": None}
 
 
@@ -3625,9 +3305,8 @@ async def getItemsNotAvailableToday(merchant_id: str, creds: dict | None = None)
         - ``success`` True, non-empty list → read out the unavailable item names.
         - ``success`` False → inform customer you couldn't load menu availability.
     """
-    print(f"[getItemsNotAvailableToday] merchant_id={merchant_id!r}")
+    print(f"[getItemsNotAvailableToday] start merchant_id={merchant_id!r}")
     if creds is None:
-        print("[getItemsNotAvailableToday] no creds available")
         return {"success": False, "unavailable_items": [], "error": "Credentials unavailable."}
 
     try:
@@ -3641,7 +3320,7 @@ async def getItemsNotAvailableToday(merchant_id: str, creds: dict | None = None)
         if not item.get("available", True):
             unavailable.append({"id": str(item_id), "name": str(item.get("name", ""))})
 
-    print(f"[getItemsNotAvailableToday] found {len(unavailable)} unavailable items")
+    print(f"[getItemsNotAvailableToday] done unavailable_count={len(unavailable)}")
     return {"success": True, "unavailable_items": unavailable, "error": None}
 
 
@@ -3674,20 +3353,19 @@ async def humanInterventionNeeded(session_id: str, escalation_type: str, merchan
         - ``success`` True → tell the customer a team member will follow up.
         - ``success`` False → still inform the customer and advise them to call the store.
     """
-    print(f"[humanInterventionNeeded] session_id={session_id!r} escalation_type={escalation_type!r} merchant_id={merchant_id!r}")
+    print(f"[humanInterventionNeeded] start session_id={session_id!r} escalation_type={escalation_type!r}")
     timestamp = datetime.now(timezone.utc).isoformat()
     payload = {"order_id": session_id, "escalation_type": escalation_type, "timestamp": timestamp, "user_id": merchant_id}
 
     escalation_url = settings.ESCALATION_URL + "/api/escalate"
     if not escalation_url:
-        print("[humanInterventionNeeded] ESCALATION_URL not configured")
         return {"success": False, "escalated": False, "error": "ESCALATION_URL is not configured"}
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(escalation_url, json=payload)
             response.raise_for_status()
-        print(f"[humanInterventionNeeded] escalation sent status={response.status_code}")
+        print(f"[humanInterventionNeeded] done escalation_type={escalation_type!r} status={response.status_code}")
         return {"success": True, "escalated": True, "error": None}
     except Exception as exc:
         print(f"[humanInterventionNeeded] failed: {exc!r}")
@@ -3727,7 +3405,7 @@ async def suggestedPickupTime(session_id: str, pickup_time_minutes: int, firebas
         - ``success`` False → still acknowledge the time to the customer but
           note internally that the notification could not be sent.
     """
-    print(f"[suggestedPickupTime] session_id={session_id!r} pickup_time_minutes={pickup_time_minutes!r} firebase_uid={firebase_uid!r}")
+    print(f"[suggestedPickupTime] start session_id={session_id!r} pickup_time_minutes={pickup_time_minutes!r}")
     timestamp = datetime.now(timezone.utc).isoformat()
     payload = {
         "order_id": session_id,
@@ -3738,14 +3416,13 @@ async def suggestedPickupTime(session_id: str, pickup_time_minutes: int, firebas
 
     pickup_url = settings.ESCALATION_URL + "/api/suggested-pickup-time"
     if not settings.ESCALATION_URL:
-        print("[suggestedPickupTime] ESCALATION_URL not configured")
         return {"success": False, "pickup_time_minutes": pickup_time_minutes, "timestamp": timestamp, "error": "ESCALATION_URL is not configured"}
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(pickup_url, json=payload)
             response.raise_for_status()
-        print(f"[suggestedPickupTime] webhook sent status={response.status_code}")
+        print(f"[suggestedPickupTime] done pickup_time_minutes={pickup_time_minutes} status={response.status_code}")
         return {"success": True, "pickup_time_minutes": pickup_time_minutes, "timestamp": timestamp, "error": None}
     except Exception as exc:
         print(f"[suggestedPickupTime] failed: {exc!r}")
@@ -3778,11 +3455,10 @@ async def askingForPickupTime(session_id: str, firebase_uid: str) -> dict:
         - success True  → no action needed; proceed normally.
         - success False → no action needed; proceed normally (silent best-effort ping).
     """
-    print(f"[askingForPickupTime] session_id={session_id!r} firebase_uid={firebase_uid!r}")
+    print(f"[askingForPickupTime] start session_id={session_id!r}")
     payload = {"order_id": session_id, "user_id": firebase_uid}
 
     if not settings.ESCALATION_URL:
-        print("[askingForPickupTime] ESCALATION_URL not configured")
         return {"success": False, "error": "ESCALATION_URL is not configured"}
 
     ping_url = settings.ESCALATION_URL + "/api/ping-for-pickup"
@@ -3791,7 +3467,7 @@ async def askingForPickupTime(session_id: str, firebase_uid: str) -> dict:
         async with httpx.AsyncClient() as client:
             response = await client.post(ping_url, json=payload)
             response.raise_for_status()
-        print(f"[askingForPickupTime] webhook sent status={response.status_code}")
+        print(f"[askingForPickupTime] done status={response.status_code}")
         return {"success": True, "error": None}
     except Exception as exc:
         print(f"[askingForPickupTime] failed: {exc!r}")
@@ -3821,11 +3497,10 @@ async def askingForWaitTime(session_id: str, firebase_uid: str) -> dict:
         - success True  → no action needed; proceed normally.
         - success False → no action needed; proceed normally (silent best-effort ping).
     """
-    print(f"[askingForWaitTime] session_id={session_id!r} firebase_uid={firebase_uid!r}")
+    print(f"[askingForWaitTime] start session_id={session_id!r}")
     payload = {"order_id": session_id, "user_id": firebase_uid}
 
     if not settings.ESCALATION_URL:
-        print("[askingForWaitTime] ESCALATION_URL not configured")
         return {"success": False, "error": "ESCALATION_URL is not configured"}
 
     ping_url = settings.ESCALATION_URL + "/api/ping-for-wait-time"
@@ -3834,7 +3509,7 @@ async def askingForWaitTime(session_id: str, firebase_uid: str) -> dict:
         async with httpx.AsyncClient() as client:
             response = await client.post(ping_url, json=payload)
             response.raise_for_status()
-        print(f"[askingForWaitTime] webhook sent status={response.status_code}")
+        print(f"[askingForWaitTime] done status={response.status_code}")
         return {"success": True, "error": None}
     except Exception as exc:
         print(f"[askingForWaitTime] failed: {exc!r}")
@@ -3866,7 +3541,7 @@ async def getPreviousOrdersDetails(session_id: str, limit: int = 3) -> dict:
         - ``success`` True, empty ``orders`` → tell customer no previous orders were found.
         - ``success`` False → inform customer you couldn't load order history.
     """
-    print(f"[getPreviousOrdersDetails] session_id={session_id!r} limit={limit!r}")
+    print(f"[getPreviousOrdersDetails] start session_id={session_id!r} limit={limit!r}")
     history_key = f"order_history:{session_id}"
     try:
         safe_limit = max(1, int(limit or 3))
@@ -3877,7 +3552,7 @@ async def getPreviousOrdersDetails(session_id: str, limit: int = 3) -> dict:
                 orders.append(json.loads(entry))
             except Exception:
                 pass
-        print(f"[getPreviousOrdersDetails] found {len(orders)} orders")
+        print(f"[getPreviousOrdersDetails] done order_count={len(orders)}")
         return {"success": True, "orders": orders, "error": None}
     except Exception as exc:
         print(f"[getPreviousOrdersDetails] failed: {exc!r}")
@@ -3907,20 +3582,18 @@ async def getHumanProfile(
         phone_number — str | None: echoed back from the input.
         error        — str | None: error message, None on success.
     """
-    print(f"[getHumanProfile] phone_number={phone_number!r} firebase_uid={firebase_uid!r}")
+    print(f"[getHumanProfile] start phone_number={phone_number!r} firebase_uid={firebase_uid!r}")
     if not phone_number:
-        print("[getHumanProfile] skipped — phone_number not available")
         return {"success": False, "name": None, "phone_number": None, "error": "phone_number not available"}
     db = _firebase.firebaseDatabase
     if db is None:
-        print("[getHumanProfile] firebase not initialised")
         return {"success": False, "name": None, "phone_number": phone_number, "error": "Firebase not initialised"}
     try:
         doc_ref = db.collection("Users").document(firebase_uid).collection("Customers").document(phone_number)
         snapshot = await doc_ref.get()
         existing = snapshot.to_dict() or {}
         name = existing.get("name") or None
-        print(f"[getHumanProfile] name={name!r}")
+        print(f"[getHumanProfile] done name={name!r}")
         return {"success": True, "name": name, "phone_number": phone_number, "error": None}
     except Exception as exc:
         print(f"[getHumanProfile] error: {exc!r}")
@@ -3955,13 +3628,11 @@ async def saveHumanName(
         - success=True  → continue normally
         - success=False → continue normally (silent failure, do not mention to customer)
     """
-    print(f"[saveHumanName] name={name!r} phone_number={phone_number!r} firebase_uid={firebase_uid!r}")
+    print(f"[saveHumanName] start name={name!r} phone_number={phone_number!r}")
     if not phone_number:
-        print("[saveHumanName] skipped — phone_number not available")
         return {"success": False, "already_saved": False, "error": "phone_number not available"}
     db = _firebase.firebaseDatabase
     if db is None:
-        print("[saveHumanName] firebase not initialised")
         return {"success": False, "already_saved": False, "error": "Firebase not initialised"}
     try:
         doc_ref = db.collection("Users").document(firebase_uid).collection("Customers").document(phone_number)
@@ -3970,17 +3641,14 @@ async def saveHumanName(
         existing_name = existing.get("name")
 
         if existing_name == name:
-            print("[saveHumanName] name already saved, skipping write")
+            print(f"[saveHumanName] done already_saved=True name={name!r}")
             return {"success": True, "already_saved": True, "error": None}
 
         await doc_ref.set(
             {"name": name, "phone_number": phone_number},
             merge=True,
         )
-        if existing_name:
-            print(f"[saveHumanName] name updated from {existing_name!r} to {name!r}")
-        else:
-            print("[saveHumanName] saved successfully")
+        print(f"[saveHumanName] done saved name={name!r}")
         return {"success": True, "already_saved": False, "error": None}
     except Exception as exc:
         print(f"[saveHumanName] error: {exc!r}")
@@ -4005,20 +3673,18 @@ async def getHumanProfile(
         name         — str | None: customer name if found, None otherwise
         error        — str | None: error message on failure, None on success
     """
-    print(f"[getHumanProfile] phone_number={phone_number!r} firebase_uid={firebase_uid!r}")
+    print(f"[getHumanProfile] start phone_number={phone_number!r} firebase_uid={firebase_uid!r}")
     if not phone_number:
-        print("[getHumanProfile] skipped — phone_number not available")
         return {"success": False, "name": None, "error": "phone_number not available"}
     db = _firebase.firebaseDatabase
     if db is None:
-        print("[getHumanProfile] firebase not initialised")
         return {"success": False, "name": None, "error": "Firebase not initialised"}
     try:
         doc_ref = db.collection("Users").document(firebase_uid).collection("Customers").document(phone_number)
         snapshot = await doc_ref.get()
         data = snapshot.to_dict() or {}
         name = data.get("name")
-        print(f"[getHumanProfile] name={name!r}")
+        print(f"[getHumanProfile] done name={name!r}")
         return {"success": True, "name": name, "error": None}
     except Exception as exc:
         print(f"[getHumanProfile] error: {exc!r}")

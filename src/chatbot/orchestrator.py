@@ -134,28 +134,12 @@ async def _gemini_service_call_with_retries(
         except AIServiceError as exc:
             is_503 = _is_gemini_http_503(exc)
             is_429 = _is_gemini_http_429(exc)
-            print(
-                f"{log_label} Gemini call failed",
-                f"trial={attempt}",
-                f"http_503={is_503}",
-                f"http_429={is_429}",
-                extra_fields,
-                f"error={exc!r}",
-            )
             if is_503 and attempt < _GEMINI_503_MAX_ATTEMPTS:
-                print(
-                    f"{log_label} backing off before retry (503)",
-                    f"sleep_s={_GEMINI_503_BACKOFF_SEC}",
-                    f"next_trial={attempt + 1}",
-                )
+                print(f"[retry] 503 attempt={attempt} sleep={_GEMINI_503_BACKOFF_SEC}s {extra_fields}")
                 await asyncio.sleep(_GEMINI_503_BACKOFF_SEC)
                 continue
             elif is_429 and attempt < _GEMINI_429_MAX_ATTEMPTS:
-                print(
-                    f"{log_label} backing off before retry (429)",
-                    f"sleep_s={_GEMINI_429_BACKOFF_SEC}",
-                    f"next_trial={attempt + 1}",
-                )
+                print(f"[retry] 429 attempt={attempt} sleep={_GEMINI_429_BACKOFF_SEC}s {extra_fields}")
                 await asyncio.sleep(_GEMINI_429_BACKOFF_SEC)
                 continue
             raise
@@ -698,11 +682,12 @@ class Orchestrator:
                     )
             if result.reply and not escalated:
                 replies.append(result.reply)
+            reply_preview = (result.reply or "").replace("\n", " ")[:120]
             print(
                 "[Orchestrator] entry executed",
                 f"entry_id={entry.get('entry_id')!r}",
                 f"success={result.success}",
-                f"clarification_q_count={len(result.clarification_questions)}",
+                f"reply_preview={reply_preview!r}",
             )
 
         only_informational_queued = bool(processed_intents) and processed_intents.issubset(_INFORMATIONAL_INTENTS)
@@ -892,11 +877,6 @@ class ParsingAgent:
             else settings.PARSING_AGENT_GEMINI_MODEL
         )
         self.prompts = prompts or DEFAULT_PARSING_AGENT_PROMPTS
-        print(
-            "[ParsingAgent] init",
-            f"model={self.model}",
-            f"prompts={'custom' if prompts is not None else 'default'}",
-        )
 
     async def run(
         self,
@@ -905,14 +885,6 @@ class ParsingAgent:
         prompts: ParsingAgentPrompts | None = None,
     ) -> ParsingAgentResult:
         active_prompts = prompts or self.prompts
-        msg_preview = context.most_recent_message.replace("\n", " ")[:120]
-        print(
-            "[ParsingAgent] run start",
-            f"session_id={context.session_id}",
-            f"merchant_id={context.merchant_id}",
-            f"most_recent_message_preview={msg_preview!r}",
-            f"run_prompts_override={'yes' if prompts is not None else 'no'}",
-        )
 
         try:
             parsed_requests = await self._generate_parse_with_gemini_503_retries(
@@ -920,7 +892,6 @@ class ParsingAgent:
                 prompts=active_prompts,
                 strict_retry=False,
             )
-            print(f"[ParsingAgent] parsed_requests={parsed_requests!r}")
         except AIServiceError as exc:
             will_retry = self._should_retry_on_parse_error(exc)
             print(
@@ -986,11 +957,6 @@ class ParsingAgent:
         prompts: ParsingAgentPrompts,
         strict_retry: bool,
     ) -> ParsedRequestsPayload:
-        print(
-            "[ParsingAgent] _generate_parse",
-            f"strict_retry={strict_retry}",
-            f"model={self.model}",
-        )
         messages = self._build_messages(
             context=context,
             prompts=prompts,
@@ -1001,11 +967,6 @@ class ParsingAgent:
             ParsedRequestsPayload,
             temperature=0,
             model=self.model,
-        )
-        print(
-            "[ParsingAgent] _generate_parse ok",
-            f"strict_retry={strict_retry}",
-            f"item_count={len(result.data)}",
         )
         return result
 
@@ -1032,12 +993,6 @@ class ParsingAgent:
             section for section in system_sections if section.strip()
         )
         user_content = self._render_context(context)
-        print(
-            "[ParsingAgent] _build_messages",
-            f"strict_retry={strict_retry}",
-            f"system_chars={len(system_prompt)}",
-            f"user_chars={len(user_content)}",
-        )
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
@@ -1054,21 +1009,10 @@ class ParsingAgent:
             unfulfilled_queue=context.unfulfilled_queue,
         )
         rendered = json.dumps(prompt_context.model_dump(mode="json"), indent=2)
-        print(
-            "[ParsingAgent] _render_context",
-            f"k_tail_messages={len(context.latest_k_messages_by_customer)}",
-            f"unfulfilled_count={len(context.unfulfilled_queue)}",
-            f"json_chars={len(rendered)}",
-        )
         return rendered
 
     def _should_retry_on_parse_error(self, error: AIServiceError) -> bool:
         retry = str(error).startswith(_PARSE_VALIDATION_ERROR_PREFIX)
-        print(
-            "[ParsingAgent] _should_retry_on_parse_error",
-            f"retry={retry}",
-            f"error_prefix={str(error)[:80]!r}",
-        )
         return retry
 
 
@@ -1092,13 +1036,6 @@ class ExecutionAgent:
         )
         self.system_prompt = (
             _EXECUTION_AGENT_SYSTEM_PROMPT if system_prompt is None else system_prompt
-        )
-        print(
-            "[ExecutionAgent] init",
-            f"model={self.model}",
-            f"max_tool_calls={self.max_tool_calls}",
-            f"system_prompt={'custom' if system_prompt is not None else 'default'}",
-            f"system_prompt_chars={len(self.system_prompt)}",
         )
 
     async def run_single(
@@ -1214,15 +1151,6 @@ class ExecutionAgent:
         ]
         if self.system_prompt.strip():
             messages.insert(0, {"role": "system", "content": self.system_prompt})
-        system_chars = sum(len(m["content"]) for m in messages if m["role"] == "system")
-        user_chars = sum(len(m["content"]) for m in messages if m["role"] == "user")
-        print(
-            "[ExecutionAgent] _build_single_intent_messages",
-            f"intent={parsed_item.get('Intent')!r}",
-            f"qa_count={len(qa)}",
-            f"system_chars={system_chars}",
-            f"user_json_chars={user_chars}",
-        )
         return messages
 
     def build_tools(
@@ -1231,11 +1159,6 @@ class ExecutionAgent:
     ) -> list[llm_client.GeminiFunctionTool]:
         runtime = runtime or ExecutionToolRuntime(
             context=ExecutionAgentContext(session_id="", merchant_id="")
-        )
-        print(
-            "[ExecutionAgent] build_tools",
-            f"session_id={runtime.context.session_id!r}",
-            f"merchant_id={runtime.context.merchant_id!r}",
         )
         return self._build_tools(runtime)
 
@@ -1284,14 +1207,6 @@ class ExecutionAgent:
         runtime: ExecutionToolRuntime,
         tracker: ExecutionTracker | None = None,
     ) -> list[llm_client.GeminiFunctionTool]:
-        print(
-            "[ExecutionAgent] _build_tools",
-            f"session_id={runtime.context.session_id!r}",
-            f"merchant_id={runtime.context.merchant_id!r}",
-            f"tracker_attached={'yes' if tracker is not None else 'no'}",
-            f"has_clover_creds={runtime.context.clover_creds is not None}",
-        )
-
         def _log_tool_call_io(
             tool_name: str, arguments: dict[str, Any], result: dict[str, Any]
         ) -> None:
@@ -1755,9 +1670,4 @@ class ExecutionAgent:
                 handler=_validate_modifications_tool,
             ),
         ]
-        print(
-            "[ExecutionAgent] _build_tools built",
-            f"gemini_tool_count={len(tools_list)}",
-            f"names={[t.name for t in tools_list]}",
-        )
         return tools_list
