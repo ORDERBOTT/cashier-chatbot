@@ -68,7 +68,7 @@ DEFAULT_PARSING_AGENT_PROMPTS = ParsingAgentPrompts(
         order_question -> Customer is neutrally asking about their current order (items in it, total price, whether something was added, etc.). Use ONLY for neutral informational requests — NOT for complaints or disputes.
         menu_question -> Customer is asking about menu or item-specific details.
         restaurant_question -> Customer is asking about the restaurant (hours, location, etc.).
-        pickuptime_question -> Customer is asking about pickup or wait time.
+        pickuptime_question -> Customer is explicitly asking about or suggesting a pickup or wait time as a standalone intent, with no accompanying order action in the same message.
         introduce_name -> Customer states their own name (e.g., "I'm John", "my name is Sarah", "it's Mike"). Use Request_items.name for the name value; quantity=0, details="". Can co-occur with greeting or any order intent — emit as a separate object.
         escalation -> Customer has a complaint, dispute, or needs human intervention. This includes ANY message where the customer says something is wrong, incorrect, or missing (e.g. "my total is wrong", "the price is off", "that's not what I ordered", "I was overcharged").
         identity_question -> Customer asks who they are talking to, what the system is, or whether it is a bot or human. Examples: "who are you?", "are you a bot?", "are you human?", "are you AI?", "am I talking to a person?", "is this a real person?". NEVER classify these as outside_agent_scope.
@@ -90,6 +90,9 @@ DEFAULT_PARSING_AGENT_PROMPTS = ParsingAgentPrompts(
         Instead, emit a separate introduce_name object for it.
         LOGISTICS ARE NOT INTENTS
         "Pickup", "to go", etc. are context, not separate intents.
+        A customer stating a preferred pickup time alongside an order action (e.g. "ready in 30
+        minutes", "I'll be there in 20", "pick up in an hour") IS a pickuptime_question intent.
+        Emit it as a separate object; capture the time phrase verbatim in its Request_details.
         QUANTITY DEFAULT = 1
         Use 0 only when not applicable (questions, confirmations, etc.).
         PORTION-SIZE PREFIX IS PART OF THE ITEM NAME
@@ -603,6 +606,38 @@ DEFAULT_PARSING_AGENT_PROMPTS = ParsingAgentPrompts(
           ],
           "ModifiedEntries": []
         }
+        --- Example 18 ---
+        Transcript:
+        C: Hi I'd like to order for pickup: 2 All American burgers single patty, Name: Tariq. Ready in 30 minutes.
+        {
+          "Data": [
+            {
+              "Intent": "greeting",
+              "Confidence_level": "high",
+              "Request_items": {"name": "", "quantity": 0, "details": ""},
+              "Request_details": "Hi I'd like to order for pickup."
+            },
+            {
+              "Intent": "add_item",
+              "Confidence_level": "high",
+              "Request_items": {"name": "All American burger", "quantity": 2, "details": "single patty"},
+              "Request_details": "2 All American burgers single patty."
+            },
+            {
+              "Intent": "introduce_name",
+              "Confidence_level": "high",
+              "Request_items": {"name": "Tariq", "quantity": 0, "details": ""},
+              "Request_details": "Name: Tariq."
+            },
+            {
+              "Intent": "pickuptime_question",
+              "Confidence_level": "high",
+              "Request_items": {"name": "", "quantity": 0, "details": ""},
+              "Request_details": "Ready in 30 minutes."
+            }
+          ],
+          "ModifiedEntries": []
+        }
         """
     ).strip(),
     final_reminders_prompt=dedent(
@@ -743,6 +778,11 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
     SINGLE INTENT SCOPE
     You process exactly one intent per invocation. Do not attempt to process additional intents.
     The orchestrator handles combining replies from multiple intents.
+    Only call tools that are required by your assigned intent. Do NOT call tools belonging to
+    other intents even if the customer message contains relevant information.
+    Example: if your assigned intent is add_item, do NOT call suggestedPickupTime,
+    askingForPickupTime, or askingForWaitTime — those belong to a pickuptime_question entry
+    that is queued separately and will be executed on its own.
 
     RESPONSE STYLE
     Short, clear SMS-style replies
