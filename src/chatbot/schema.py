@@ -279,3 +279,109 @@ class ExecutionAgentSingleResult(BaseModel):
 # Backwards-compat aliases (removed after all callers updated)
 BotMessageRequest = BotInteractionRequest
 BotMessageResponse = ChatbotResponse
+
+
+class OrderingStage(str, Enum):
+    ORDERING = "ordering"
+    AWAITING_ANYTHING_ELSE = "awaiting_anything_else"
+    AWAITING_ORDER_CONFIRM = "awaiting_order_confirm"
+    AWAITING_NAME_BEFORE_CONFIRM = "awaiting_name_before_confirm"
+    AWAITING_NAME_CONFIRM = "awaiting_name_confirm"
+
+
+class NameGateStatus(str, Enum):
+    SATISFIED = "satisfied"
+    NO_NAME_ON_FILE = "no_name_on_file"
+    UNCONFIRMED_NAME_ON_FILE = "unconfirmed_name_on_file"
+
+
+class SessionStatus(str, Enum):
+    ACTIVE = "active"
+    CONFIRMED = "confirmed"
+
+
+class ChatTurn(BaseModel):
+    role: Literal["customer", "assistant"]
+    content: str
+    timestamp: str
+
+
+class OrderLine(BaseModel):
+    name: str
+    quantity: int
+    modifiers: list[str] = []
+
+
+class PendingClarification(BaseModel):
+    entry_id: str
+    questions: list[QAPair]
+    attempt_count: int
+
+
+class ActionOutcome(BaseModel):
+    intent: str
+    success: bool
+    facts: dict = {}
+    error_kind: str | None = None
+    needs_clarification: bool = False
+    clarification_questions: list[str] = []
+    raw_executor_reply: str | None = None
+    escalated: bool = False
+
+
+class SessionSnapshot(BaseModel):
+    # Persistent session state
+    stage: OrderingStage
+    is_order_confirmed: bool
+    name_on_file: str | None
+    name_provided_this_session: bool
+    name_gate_status: NameGateStatus
+    off_topic_count: int
+
+    # This-turn computed booleans
+    saw_confirm_intent_this_turn: bool
+    all_outcomes_succeeded: bool
+    order_updated_this_turn: bool
+    only_informational_this_turn: bool
+    only_greetings_this_turn: bool
+    escalation_fired_this_turn: bool
+
+    # Order state
+    current_order_summary: list[OrderLine]
+    pending_clarifications: list[PendingClarification]
+
+
+class MerchantPersona(BaseModel):
+    brand_name: str
+    formality: Literal["casual", "neutral", "formal"] = "neutral"
+    contractions: bool = True
+    use_customer_name: Literal["never", "sparingly", "often"] = "sparingly"
+    sample_phrases: list[str] = []
+    identity_deflect_lines: list[str] = []
+
+
+class QueueMutation(BaseModel):
+    entry_id: str
+    action: Literal["mark_done", "mark_clarification", "remove"]
+    qa_to_set: list[QAPair] = []
+
+
+class ComposerInput(BaseModel):
+    customer_message: str
+    history_tail: list[ChatTurn]
+    outcomes: list[ActionOutcome]
+    snapshot: SessionSnapshot
+    persona: MerchantPersona
+    merchant_id: str
+    session_id: str          # NEW — needed by tool wrappers
+    phone_number: str        # NEW
+    firebase_uid: str        # NEW
+
+
+class ComposerOutput(BaseModel):
+    reply: str
+    next_stage: OrderingStage
+    session_status: SessionStatus | None = None
+    name_provided_this_session: bool = False
+    queue_mutations: list[QueueMutation] = []
+    tools_called: list[str] = []
