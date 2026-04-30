@@ -43,6 +43,7 @@ DEFAULT_PARSING_AGENT_PROMPTS = ParsingAgentPrompts(
           "ModifiedEntries": [
             {
               "EntryId": "<entry_id from unfulfilled_queue>",
+              "ConfirmedItemName": "<exact menu item name the customer confirmed, or null>",
               "QA": [
                 {"question": "<original question>", "answer": "<customer answer>"}
               ]
@@ -50,6 +51,10 @@ DEFAULT_PARSING_AGENT_PROMPTS = ParsingAgentPrompts(
           ]
         }
         ModifiedEntries is always present but will be an empty array in case Unfulfilled queue is empty.
+        ConfirmedItemName is set only when the QA contains a "Did you mean [X]?" or
+        "Just to confirm, did you mean [X]?" question AND the customer's latest message
+        is an affirmative reply. Extract [X] exactly as written (preserving capitalisation).
+        Leave ConfirmedItemName null for modifier/size selections and all other cases.
         Return ONLY the JSON.
         No explanation. No preamble. No markdown fences.
         """
@@ -198,6 +203,15 @@ DEFAULT_PARSING_AGENT_PROMPTS = ParsingAgentPrompts(
         "That's it", "I'm good", "Nothing else", "No thanks", "All good", "That's all"),
         classify the intent as confirm_order with high confidence.
         Do NOT mark it as outside_agent_scope or greeting.
+        CONFIRMED ITEM NAME DETECTION
+        When processing an unfulfilled_queue entry whose QA contains a question of the form
+        "Just to confirm, did you mean [X]?" or "Did you mean [X]?" and the customer's
+        latest message is an affirmative reply ("yes", "yep", "yeah", "correct", "that's
+        right", "sure", "exactly", "that one", "that's it", etc.), set ConfirmedItemName
+        to [X] exactly as it appears in the question (preserving capitalisation and spacing).
+        Only set ConfirmedItemName for item-name disambiguation questions. Do NOT set it
+        when the question is about a modifier, size, sauce, or any other attribute — those
+        are just regular QA answers.
         """
     ).strip(),
     few_shot_examples_prompt=dedent(
@@ -940,10 +954,22 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
            AND the customer's latest reply is still a rejection
            → Call humanInterventionNeeded immediately. Do not ask again.
 
-         Confirmation — qa_pairs shows the customer confirmed "yes" (or equivalent) to a
-           "did you mean [X]?" question → re-call validateRequestedItem(candidates[0].name, details)
-           immediately. Do NOT call addItemsToOrder yet. Apply the full step-1 check on the result,
-           including the missingRequireChoice STOP rule, before proceeding.
+         Confirmation — confirmed_item_name is set in your context (the orchestrator has
+           already recorded the customer's confirmation). Do NOT call validateRequestedItem
+           again. Instead:
+           1. Read close_match_candidates[0] from your context for itemId and merchantId.
+           2. Call validateModifications(itemId=close_match_candidates[0].itemId,
+                merchantId=close_match_candidates[0].merchantId,
+                requestedModifications=resolved_details.split() if resolved_details else [])
+              immediately. resolved_details already contains the original item details plus
+              any leftover words from the customer's original message.
+           3. Apply the full missingRequireChoice STOP rule on the result before calling
+              addItemsToOrder. When asking for a missing required modifier, do NOT re-call
+              validateModifications — wait for the customer's answer (it will be appended
+              to resolved_details by the orchestrator on the next turn, and validateModifications
+              will be called again with the updated resolved_details at that point).
+           4. When allValid is True → call addItemsToOrder with itemId, valid modifier IDs,
+              asNote, and confidence: "medium".
        - available == False              ▶ STOP → tell customer item is unavailable
        - invalid non-empty (modifier was customer-requested but unresolved)
                                          ▶ STOP → ask customer to clarify what they meant

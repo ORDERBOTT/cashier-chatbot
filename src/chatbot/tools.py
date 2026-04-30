@@ -2,6 +2,7 @@ import itertools
 import json
 import re
 import builtins
+import unicodedata
 import asyncio
 import uuid
 from contextvars import ContextVar, Token
@@ -493,7 +494,7 @@ def _find_closest_menu_items_from_menu(
     )
 
     if exact_match is not None:
-        candidates = _build_candidates(top_matches, details, items_by_name)
+        candidates = _build_candidates(top_matches, details, items_by_name, item_name=item_name)
         return {
             "exact_match": exact_match,
             "candidates": candidates,
@@ -518,7 +519,7 @@ def _find_closest_menu_items_from_menu(
         return _no_match
 
     best_score = top_matches[0][1]
-    candidates = _build_candidates(top_matches, details, items_by_name)
+    candidates = _build_candidates(top_matches, details, items_by_name, item_name=item_name)
 
     # If the top fuzzy match is high-confidence with no close competitor, auto-confirm
     # it as exact — mirrors FuzzyMatcher.match_item which confirms at CONFIRMED_THRESHOLD.
@@ -768,17 +769,44 @@ def _score_details_against_item(details: str, item_def: dict) -> float:
     return best[1] if best else 0.0
 
 
+def _normalize_word(word: str) -> str:
+    """Lowercase, strip accents, expand hyphens/slashes — canonical form for name matching.
+
+    "jalapeño" → "jalapeno",  "bone-in" is handled at the token level by _expand_token.
+    """
+    return unicodedata.normalize("NFKD", word).encode("ascii", "ignore").decode("ascii")
+
+
+def _expand_token(token: str) -> list[str]:
+    """Normalize and split a hyphen/slash-connected token into sub-tokens.
+
+    "bone-in" → ["bone", "in"],  "jalapeño" → ["jalapeno"],  "s&p" → ["s&p"].
+    """
+    return [_normalize_word(t) for t in re.split(r"[-/]", token) if t]
+
+
 def _build_candidates(
-    top_matches: list, details: str | None, items_by_name: dict
+    top_matches: list, details: str | None, items_by_name: dict, *, item_name: str = ""
 ) -> list[dict]:
-    candidates = [
-        defn
-        for name, _, _ in top_matches[:3]
-        if (defn := _get_local_item(name, items_by_name)) is not None
-    ]
+    raw_candidates = []
+    for name, _, _ in top_matches[:3]:
+        defn = _get_local_item(name, items_by_name)
+        if defn is None:
+            continue
+        # Build normalized candidate name word set: expand hyphens + strip accents.
+        candidate_name_words: set[str] = set()
+        for w in str(defn.get("name", "")).lower().split():
+            candidate_name_words.update(_expand_token(w))
+        # A token is leftover only if at least one of its normalized sub-tokens is
+        # absent from the candidate name — handles "bone-in" and "jalapeño"/"jalapeno".
+        leftover = [
+            w for w in item_name.lower().split()
+            if not all(sub in candidate_name_words for sub in _expand_token(w))
+        ]
+        raw_candidates.append({**defn, "leftover_words": leftover})
     if not details:
-        return candidates
-    scored = [(c, _score_details_against_item(details, c)) for c in candidates]
+        return raw_candidates
+    scored = [(c, _score_details_against_item(details, c)) for c in raw_candidates]
     scored.sort(key=lambda x: x[1], reverse=True)
     return [c for c, _ in scored]
 
@@ -1727,6 +1755,7 @@ async def validateRequestedItem(
             "asNote": as_note,
             "missingRequireChoice": missing_require_choice,
             "allValid": all_valid,
+            "leftoverWords": leftover_words,
             "isModifierOrAddon": None,
             "classification": None,
             "closestModifier": None,

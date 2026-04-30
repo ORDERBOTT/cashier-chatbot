@@ -439,3 +439,35 @@ Boneless wing items allow a number of sauce/flavor selections proportional to th
 ### Gotchas
 - The rule targets only the five specific item IDs in `WINGS_FLAVOR_RULE`. Adding a new wing size = one new entry in that dict.
 - The Wings Sauce group ID (`9YPVZH2K458QC`) is hardcoded. If Clover regenerates group IDs, update `WINGS_SAUCE_GROUP_ID`.
+
+## 2026-05-01 - Close-match confirmed item name + resolved details
+
+### Overview
+Explicitly stores the confirmed menu item name and close-match candidates in the queue entry when a customer confirms a fuzzy-match clarification question. Also accumulates modifier answers into a `resolved_details` field so the execution agent never has to re-derive context across turns.
+
+### New queue entry fields (`schema.py` — `IntentQueueEntry`)
+- `close_match_candidates` — stored when entry goes `need_clarification` on a close match; each candidate includes `name`, `itemId`, `merchantId`, **and `leftover_words`** (tokens from the customer's original item name not present in the candidate name).
+- `confirmed_item_name` — set when the customer confirms a candidate; parser emits `ConfirmedItemName` in `ModifiedEntries`.
+- `resolved_details` — progressively-built details string used for all `validateModifications` calls. Initialised from `original_details + leftover_words` at confirmation time; modifier QA answers are appended on each subsequent turn.
+
+### Data flow per turn
+| Turn | Event | Queue entry state |
+|---|---|---|
+| T1 | Close match, entry `need_clarification` | `close_match_candidates` set (with `leftover_words`); others null |
+| T2 | Customer confirms "yes" | `confirmed_item_name` set; candidates pruned to 1; `resolved_details = original_details + leftover_words` |
+| T2 | Execution agent calls `validateModifications(resolved_details)` — modifier missing | New QA appended |
+| T3 | Customer picks modifier | `resolved_details = resolved_details + answer` |
+| T3 | Execution agent calls `validateModifications(resolved_details)` — allValid → `addItemsToOrder` | Done |
+
+### Key changes
+- `src/chatbot/tools.py` — `_build_candidates`: added `item_name` kwarg; computes `leftover_words` per candidate (shallow-copies the item dict before adding the field). Both call sites in `_find_closest_menu_items_from_menu` updated.
+- `src/chatbot/schema.py` — `ModifiedQueueEntry.ConfirmedItemName`, `ExecutionAgentSingleResult.close_match_candidates`, `ExecutionAgentPromptContext` three new fields.
+- `src/chatbot/orchestrator.py` — `ExecutionTracker.close_match_candidates` captures candidates when `validateRequestedItem` returns `matchConfidence == "close"`. ModifiedEntries merge section handles confirmation + modifier-answer accumulation. `_build_single_intent_messages` passes new fields through.
+- `src/chatbot/promptsv2.py` — Parser output schema adds `ConfirmedItemName`; parsing rules add `CONFIRMED ITEM NAME DETECTION`; execution agent "Confirmation" step rewired to use stored candidate + `validateModifications(resolved_details)`.
+
+### Gotchas
+- The execution agent skips `validateRequestedItem` entirely once `confirmed_item_name` is set — it goes straight to `validateModifications` using `close_match_candidates[0]`.
+- `resolved_details` splits on whitespace when passed to `validateModifications.requestedModifications` — this matches the existing list-of-strings contract.
+- `leftover_words` is computed from the customer's original item name against each candidate name independently. Stopwords are NOT filtered here (unlike the orphan-downgrade check) — minor words in the original query that are absent from the candidate name still show up as leftover and get passed to the modifier resolver, which ignores truly irrelevant tokens.
+- **Exact match** also populates `confirmed_item_name` and `close_match_candidates`, set immediately when the entry goes `need_clarification` (not deferred to a parser turn). The tracker captures them when `matchConfidence` is `"exact"` or `"auto_exact"` and `allValid == False`. `leftoverWords` is now returned in the `validateRequestedItem` result and stored in the single-element candidate so `resolved_details` is initialised consistently for both paths.
+- `confirmed_item_name` has two write paths: parser (`ConfirmedItemName` in `ModifiedEntries`, for close-match) and tracker → orchestrator main loop (for exact/auto_exact). The modifier-answer accumulation branch (`elif entry.get("confirmed_item_name")`) is correct for both because the condition is the same.

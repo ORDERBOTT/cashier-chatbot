@@ -181,6 +181,7 @@ class ModifiedQueueEntry(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     entry_id: str = Field(alias="EntryId")
+    confirmed_item_name: str | None = Field(alias="ConfirmedItemName", default=None)
     qa: list[QAPair] = Field(alias="QA")
 
 
@@ -196,6 +197,9 @@ class IntentQueueEntry(BaseModel):
     status: Literal["pending", "need_clarification"] = "pending"
     parsed_item: dict[str, Any]
     qa: list[QAPair] = Field(default_factory=list)
+    confirmed_item_name: str | None = None
+    close_match_candidates: list[dict[str, Any]] | None = None
+    resolved_details: str | None = None
 
 
 class CurrentOrderLineItem(BaseModel):
@@ -264,6 +268,9 @@ class ExecutionAgentPromptContext(BaseModel):
     context_object: dict[str, Any]
     intent: dict[str, Any]
     qa: list[dict[str, Any]]
+    confirmed_item_name: str | None = None
+    close_match_candidates: list[dict[str, Any]] | None = None
+    resolved_details: str | None = None
     tools: list[dict[str, Any]]
 
 
@@ -274,6 +281,8 @@ class ExecutionAgentSingleResult(BaseModel):
     actions_executed: list[str] = Field(default_factory=list)
     order_updated: bool = False
     escalated: bool = False
+    close_match_candidates: list[dict[str, Any]] | None = None
+    confirmed_item_name: str | None = None
 
 
 # Backwards-compat aliases (removed after all callers updated)

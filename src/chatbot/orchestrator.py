@@ -500,6 +500,8 @@ class ExecutionToolRuntime:
 class ExecutionTracker:
     actions_executed: list[str] = field(default_factory=list)
     order_updated: bool = False
+    close_match_candidates: list[dict] | None = None
+    confirmed_item_name: str | None = None
 
 
 class Orchestrator:
@@ -1419,11 +1421,36 @@ class Orchestrator:
             # --- Apply parser-resolved Q&A to existing entries ---
             for mod in parsed_input.parsed_requests.modified_entries:
                 for entry in queue:
-                    if entry.get("entry_id") == mod.entry_id:
-                        filled_qa = [qa.model_dump() for qa in mod.qa]
-                        entry["qa"] = filled_qa
-                        if all(p.get("answer") is not None for p in filled_qa):
-                            entry["status"] = "pending"
+                    if entry.get("entry_id") != mod.entry_id:
+                        continue
+                    old_qa = list(entry.get("qa", []))
+                    filled_qa = [qa.model_dump() for qa in mod.qa]
+                    entry["qa"] = filled_qa
+                    if all(p.get("answer") is not None for p in filled_qa):
+                        entry["status"] = "pending"
+
+                    if mod.confirmed_item_name:
+                        # Customer just confirmed a close-match item name.
+                        entry["confirmed_item_name"] = mod.confirmed_item_name
+                        candidates = entry.get("close_match_candidates") or []
+                        entry["close_match_candidates"] = [
+                            c for c in candidates if c.get("name") == mod.confirmed_item_name
+                        ]
+                        confirmed_candidate = next(iter(entry["close_match_candidates"]), None)
+                        leftover = confirmed_candidate.get("leftover_words", []) if confirmed_candidate else []
+                        orig_details = (
+                            ((entry.get("parsed_item") or {}).get("Request_items") or {}).get("details") or ""
+                        )
+                        parts = [p for p in [orig_details] + leftover if p]
+                        entry["resolved_details"] = " ".join(parts).strip()
+
+                    elif entry.get("confirmed_item_name"):
+                        # Item already confirmed in a prior turn; append newly-answered
+                        # modifier questions to resolved_details.
+                        for old, new in zip(old_qa, filled_qa):
+                            if old.get("answer") is None and new.get("answer") is not None:
+                                current = entry.get("resolved_details") or ""
+                                entry["resolved_details"] = (current + " " + new["answer"]).strip()
 
             # --- Enqueue new entries ---
             for item in parsed_data:
@@ -1484,6 +1511,17 @@ class Orchestrator:
                     entry["status"] = "need_clarification"
                     for q in result.clarification_questions:
                         entry["qa"].append({"question": q, "answer": None})
+                    if result.close_match_candidates:
+                        entry["close_match_candidates"] = result.close_match_candidates
+                    if result.confirmed_item_name and not entry.get("confirmed_item_name"):
+                        entry["confirmed_item_name"] = result.confirmed_item_name
+                        confirmed_candidate = next(iter(result.close_match_candidates or []), None)
+                        leftover = confirmed_candidate.get("leftover_words", []) if confirmed_candidate else []
+                        orig_details = (
+                            ((entry.get("parsed_item") or {}).get("Request_items") or {}).get("details") or ""
+                        )
+                        parts = [p for p in [orig_details] + leftover if p]
+                        entry["resolved_details"] = " ".join(parts).strip()
 
             # --- Save queue (Composer may further mutate via queue_mutations) ---
             # Provisional save — Composer's queue_mutations applied below.
@@ -1994,6 +2032,9 @@ class ExecutionAgent:
         entry_id = entry.get("entry_id", "")
         parsed_item = entry.get("parsed_item", {})
         qa = entry.get("qa", [])
+        confirmed_item_name = entry.get("confirmed_item_name")
+        close_match_candidates = entry.get("close_match_candidates")
+        resolved_details = entry.get("resolved_details")
 
         intent_label = parsed_item.get("Intent", "unknown")
         force_refresh_order = intent_label == "order_question"
@@ -2011,6 +2052,9 @@ class ExecutionAgent:
         messages = self._build_single_intent_messages(
             parsed_item=parsed_item,
             qa=qa,
+            confirmed_item_name=confirmed_item_name,
+            close_match_candidates=close_match_candidates,
+            resolved_details=resolved_details,
             context_object=context_object,
             tools=active_tools,
         )
@@ -2067,6 +2111,8 @@ class ExecutionAgent:
             actions_executed=tracker.actions_executed,
             order_updated=tracker.order_updated,
             escalated=escalated,
+            close_match_candidates=tracker.close_match_candidates,
+            confirmed_item_name=tracker.confirmed_item_name,
         )
 
     def _build_single_intent_messages(
@@ -2074,6 +2120,9 @@ class ExecutionAgent:
         *,
         parsed_item: dict,
         qa: list[dict],
+        confirmed_item_name: str | None = None,
+        close_match_candidates: list[dict] | None = None,
+        resolved_details: str | None = None,
         context_object: PreparedExecutionContext,
         tools: Sequence[llm_client.GeminiFunctionTool],
     ) -> list[LLMMessage]:
@@ -2081,6 +2130,9 @@ class ExecutionAgent:
             context_object=context_object.model_dump(mode="json"),
             intent=parsed_item,
             qa=qa,
+            confirmed_item_name=confirmed_item_name,
+            close_match_candidates=close_match_candidates,
+            resolved_details=resolved_details,
             tools=[
                 ExecutionAgentToolDescriptor(
                     name=tool.name,
@@ -2229,6 +2281,19 @@ class ExecutionAgent:
                 creds=runtime.context.clover_creds,
             )
             _log_tool_call_io("validateRequestedItem", args, out)
+            if tracker is not None:
+                confidence = out.get("matchConfidence")
+                if confidence == "close":
+                    tracker.close_match_candidates = out.get("candidates") or []
+                elif confidence in ("exact", "auto_exact") and out.get("allValid") is False:
+                    exact_match = out.get("exactMatch") or {}
+                    tracker.confirmed_item_name = exact_match.get("name") or ""
+                    tracker.close_match_candidates = [{
+                        **exact_match,
+                        "itemId": out.get("itemId"),
+                        "merchantId": out.get("merchantId"),
+                        "leftover_words": out.get("leftoverWords", []),
+                    }]
             return out
 
         async def _add_items_to_order_tool(*, items: list[dict]) -> dict[str, Any]:
