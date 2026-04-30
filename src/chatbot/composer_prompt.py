@@ -26,7 +26,13 @@ def _formality_block(persona: MerchantPersona) -> str:
         if persona.contractions
         else "Do not use contractions. Write 'I will' not 'I'll', 'cannot' not 'can't'."
     )
-    return f"{tone}\n{contractions}"
+    greeting = (
+        "On greeting-only turns, always pivot immediately to taking an order — "
+        "never respond with a generic offer to help. Reply as a cashier who just "
+        "looked up from the counter: warm, brief, and food-focused "
+        "(e.g. 'Hey! How can I help you with your order?')."
+    )
+    return f"{tone}\n{contractions}\n{greeting}"
 
 
 def _name_use_block(persona: MerchantPersona) -> str:
@@ -176,7 +182,24 @@ _FEW_SHOT_EXAMPLES = dedent(
     """
     FEW-SHOT EXAMPLES
 
-    --- Example 1: single successful add ---
+    --- Example 1: greeting only ---
+    Input excerpt:
+      customer_message: "hi"
+      outcomes: [{intent: "greeting", success: true}]
+      snapshot.only_greetings_this_turn: true
+      snapshot.current_order_summary: []
+
+    Output:
+      {
+        "reply": "Hey! Are you ready to place an order?",
+        "next_stage": "ordering",
+        "session_status": null,
+        "name_provided_this_session": false,
+        "queue_mutations": [],
+        "tools_called": []
+      }
+
+    --- Example 2: single successful add ---
     Input excerpt:
       customer_message: "one classic burger"
       outcomes: [{intent: "add_item", success: true,
@@ -195,7 +218,7 @@ _FEW_SHOT_EXAMPLES = dedent(
         "tools_called": []
       }
 
-    --- Example 2: multi-intent weave ---
+    --- Example 3: multi-intent weave ---
     Input excerpt:
       customer_message: "two cheeseburgers and a large fries"
       outcomes: [
@@ -216,7 +239,7 @@ _FEW_SHOT_EXAMPLES = dedent(
         "tools_called": []
       }
 
-    --- Example 3: clarification needed ---
+    --- Example 4: clarification needed ---
     Input excerpt:
       customer_message: "wings"
       outcomes: [{intent: "add_item", success: false, needs_clarification: true,
@@ -233,7 +256,7 @@ _FEW_SHOT_EXAMPLES = dedent(
         "tools_called": []
       }
 
-    --- Example 4: confirm intent, no name on file ---
+    --- Example 5: confirm intent, no name on file ---
     Input excerpt:
       customer_message: "yes"
       outcomes: [{intent: "confirm_order", success: true}]
@@ -250,7 +273,7 @@ _FEW_SHOT_EXAMPLES = dedent(
         "tools_called": []
       }
 
-    --- Example 5: confirm with existing name to confirm ---
+    --- Example 6: confirm with existing name to confirm ---
     Input excerpt:
       customer_message: "yes"
       snapshot.name_gate_status: "unconfirmed_name_on_file"
@@ -266,7 +289,7 @@ _FEW_SHOT_EXAMPLES = dedent(
         "tools_called": []
       }
 
-    --- Example 6: post-confirm informational ---
+    --- Example 7: post-confirm informational ---
     Input excerpt:
       customer_message: "what's in my order?"
       snapshot.is_order_confirmed: true
@@ -282,7 +305,7 @@ _FEW_SHOT_EXAMPLES = dedent(
         "tools_called": []
       }
 
-    --- Example 7: off-topic redirect ---
+    --- Example 8: off-topic redirect ---
     Input excerpt:
       customer_message: "what's the weather like there?"
       outcomes: [{intent: "outside_agent_scope", success: true}]
@@ -298,7 +321,7 @@ _FEW_SHOT_EXAMPLES = dedent(
         "tools_called": []
       }
 
-    --- Example 8: name provided, transitioning to awaiting_order_confirm ---
+    --- Example 9: name provided, transitioning to awaiting_order_confirm ---
     Input excerpt:
       customer_message: "karim"
       outcomes: [{intent: "introduce_name", success: true,
@@ -316,7 +339,7 @@ _FEW_SHOT_EXAMPLES = dedent(
         "tools_called": ["saveHumanName"]
       }
 
-    --- Example 9: confirm intent with empty order ---
+    --- Example 10: confirm intent with empty order ---
     Input excerpt:
       customer_message: "yes"
       outcomes: [{intent: "confirm_order", success: true}]
@@ -333,7 +356,7 @@ _FEW_SHOT_EXAMPLES = dedent(
         "tools_called": []
       }
 
-    --- Example 10: customer provides name in same turn as confirm ---
+    --- Example 11: customer provides name in same turn as confirm ---
     Input excerpt:
       customer_message: "yes, it's Mike"
       outcomes: [
