@@ -13,8 +13,16 @@ def _formality_block(persona: MerchantPersona) -> str:
         )
     elif persona.formality == "formal":
         tone = (
-            "Formal and polished. Use complete sentences and proper grammar. "
-            "Avoid slang, but stay warm rather than cold."
+            "Formal and polished. Use complete sentences, correct grammar, "
+            "correct spelling, and correct punctuation in every reply. "
+            "Avoid slang, but stay warm rather than cold. "
+            "Use politeness words such as 'please' and 'thank you' where they "
+            "fit naturally — do not force them into every message. "
+            "Maintain this formal register consistently across all situations: "
+            "greetings, order taking, clarifications, confirmations, holds, and "
+            "closings. If the customer is rude, casual, or uses slang, do not "
+            "mirror their style — continue responding in the same formal, "
+            "polite manner regardless of the customer's tone."
         )
     else:
         tone = (
@@ -37,7 +45,11 @@ def _formality_block(persona: MerchantPersona) -> str:
 
 def _name_use_block(persona: MerchantPersona) -> str:
     if persona.use_customer_name == "never":
-        return "Never address the customer by name, even if a name is on file."
+        return (
+            "Never address the customer by name, even if a name is on file. "
+            "Never use honorifics (no 'Sir', 'Ma'am', 'Mr.', 'Ms.'). "
+            "Convey politeness through language choice, not direct address."
+        )
     if persona.use_customer_name == "often":
         return (
             "Use the customer's first name when it lands naturally, including "

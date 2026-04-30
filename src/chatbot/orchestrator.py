@@ -1626,9 +1626,9 @@ class Orchestrator:
         """
         return MerchantPersona(
             brand_name="Smash N Wings",
-            formality="casual",
-            contractions=True,
-            use_customer_name="sparingly",
+            formality="formal",
+            contractions=False,
+            use_customer_name="never",
             sample_phrases=[],
             identity_deflect_lines=[
                 "Hey it's Smash N Wings — can I help you with your order?",
