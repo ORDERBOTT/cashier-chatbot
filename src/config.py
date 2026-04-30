@@ -22,6 +22,7 @@ class Config(BaseSettings):
     OPENAI_MODEL: str = "gpt-5.4"
     PARSING_AGENT_OPENAI_MODEL: str = "gpt-5.4"
     EXECUTION_AGENT_OPENAI_MODEL: str = "gpt-5.4"
+    COMPOSER_AGENT_OPENAI_MODEL: str = "gpt-5.4"
     REDIS_URL: RedisDsn
     FIREBASE_PROJECT_ID: str
     FIREBASE_CLIENT_EMAIL: str
