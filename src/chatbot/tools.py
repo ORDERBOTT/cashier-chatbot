@@ -2,6 +2,7 @@ import itertools
 import json
 import re
 import builtins
+import unicodedata
 import asyncio
 import uuid
 from contextvars import ContextVar, Token
@@ -50,7 +51,6 @@ from src.chatbot.constants import (
     _CLOVER_CREDS_REDIS_TTL_SECONDS,
     _COOKING_PREFERENCE_HINTS,
     _COOKING_MODIFIER_HINTS,
-    _DEFAULT_PICKUP_MINUTES,
     _SESSION_CLOVER_ORDER_REDIS_TTL_SECONDS,
     _SESSION_ORDER_DATA_REDIS_TTL_SECONDS,
     _SUMMARIZE_HISTORY_MAX_OUTPUT_TOKENS,
@@ -494,7 +494,7 @@ def _find_closest_menu_items_from_menu(
     )
 
     if exact_match is not None:
-        candidates = _build_candidates(top_matches, details, items_by_name)
+        candidates = _build_candidates(top_matches, details, items_by_name, item_name=item_name)
         return {
             "exact_match": exact_match,
             "candidates": candidates,
@@ -519,7 +519,7 @@ def _find_closest_menu_items_from_menu(
         return _no_match
 
     best_score = top_matches[0][1]
-    candidates = _build_candidates(top_matches, details, items_by_name)
+    candidates = _build_candidates(top_matches, details, items_by_name, item_name=item_name)
 
     # If the top fuzzy match is high-confidence with no close competitor, auto-confirm
     # it as exact — mirrors FuzzyMatcher.match_item which confirms at CONFIRMED_THRESHOLD.
@@ -769,17 +769,44 @@ def _score_details_against_item(details: str, item_def: dict) -> float:
     return best[1] if best else 0.0
 
 
+def _normalize_word(word: str) -> str:
+    """Lowercase, strip accents, expand hyphens/slashes — canonical form for name matching.
+
+    "jalapeño" → "jalapeno",  "bone-in" is handled at the token level by _expand_token.
+    """
+    return unicodedata.normalize("NFKD", word).encode("ascii", "ignore").decode("ascii")
+
+
+def _expand_token(token: str) -> list[str]:
+    """Normalize and split a hyphen/slash-connected token into sub-tokens.
+
+    "bone-in" → ["bone", "in"],  "jalapeño" → ["jalapeno"],  "s&p" → ["s&p"].
+    """
+    return [_normalize_word(t) for t in re.split(r"[-/]", token) if t]
+
+
 def _build_candidates(
-    top_matches: list, details: str | None, items_by_name: dict
+    top_matches: list, details: str | None, items_by_name: dict, *, item_name: str = ""
 ) -> list[dict]:
-    candidates = [
-        defn
-        for name, _, _ in top_matches[:3]
-        if (defn := _get_local_item(name, items_by_name)) is not None
-    ]
+    raw_candidates = []
+    for name, _, _ in top_matches[:3]:
+        defn = _get_local_item(name, items_by_name)
+        if defn is None:
+            continue
+        # Build normalized candidate name word set: expand hyphens + strip accents.
+        candidate_name_words: set[str] = set()
+        for w in str(defn.get("name", "")).lower().split():
+            candidate_name_words.update(_expand_token(w))
+        # A token is leftover only if at least one of its normalized sub-tokens is
+        # absent from the candidate name — handles "bone-in" and "jalapeño"/"jalapeno".
+        leftover = [
+            w for w in item_name.lower().split()
+            if not all(sub in candidate_name_words for sub in _expand_token(w))
+        ]
+        raw_candidates.append({**defn, "leftover_words": leftover})
     if not details:
-        return candidates
-    scored = [(c, _score_details_against_item(details, c)) for c in candidates]
+        return raw_candidates
+    scored = [(c, _score_details_against_item(details, c)) for c in raw_candidates]
     scored.sort(key=lambda x: x[1], reverse=True)
     return [c for c, _ in scored]
 
@@ -1728,6 +1755,7 @@ async def validateRequestedItem(
             "asNote": as_note,
             "missingRequireChoice": missing_require_choice,
             "allValid": all_valid,
+            "leftoverWords": leftover_words,
             "isModifierOrAddon": None,
             "classification": None,
             "closestModifier": None,
@@ -1800,6 +1828,15 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
         updatedOrderTotal (int)
             Current order total in cents after all additions; 0 when the fetch fails.
 
+        missingRequiredModifiers (list[dict])
+            One entry per item that was blocked because required modifier groups had no
+            customer-provided selection. Each entry has:
+              - ``itemId``   (str)        — the item UUID that was blocked.
+              - ``itemName`` (str)        — display name.
+              - ``groups``   (list[dict]) — each missing group: groupId, groupName,
+                                           minRequired, modifiers (list of {id, name}).
+            Empty list when all items passed the required-modifier check.
+
     Decision guide for the agent:
         - ``success`` True  → confirm all items added, quote ``updatedOrderTotal`` to the customer.
         - ``success`` False, addedItems non-empty → partial success; tell customer what was added
@@ -1808,6 +1845,10 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
         - ``failedItems[].reason`` contains "ambiguous" → ask customer to clarify item vs modifier.
         - ``failedItems[].reason`` contains "not found" → item is not on the menu; suggest alternatives.
         - ``failedItems[].reason`` contains "modifier before" → modifiers must follow an item spec.
+        - ``missingRequiredModifiers`` non-empty → DO NOT report a failure to the customer.
+          Re-call validateRequestedItem(itemName, details) for each blocked item (same itemName,
+          same details). Apply the missingRequireChoice STOP rule, collect the customer's choices,
+          then retry addItemsToOrder with the modifier IDs included.
     """
     print(f"[addItemsToOrder] start session_id={session_id!r} item_count={len(items or [])}")
     if creds is None:
@@ -1829,6 +1870,7 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
 
     added_items: list[dict] = []
     failed_items: list[dict] = []
+    missing_required_map: dict[str, list[dict]] = {}
     last_added_line_item_id: str | None = None
 
     for spec in items:
@@ -1888,6 +1930,26 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
 
         # NORMAL PATH
         item_row = by_id[item_id]
+
+        # Required modifier gate — reject before touching Clover if any min_required group is unsatisfied
+        missing_groups: list[dict] = []
+        for group in item_row.get("modifier_groups") or []:
+            min_req = int(group.get("min_required") or 0)
+            if min_req > 0:
+                group_mod_ids = {m["id"] for m in group.get("modifiers") or []}
+                provided = sum(1 for m in modifiers if m in group_mod_ids)
+                if provided < min_req:
+                    missing_groups.append({
+                        "groupId": group["id"],
+                        "groupName": group["name"],
+                        "minRequired": min_req,
+                        "modifiers": [{"id": m["id"], "name": m["name"]} for m in group.get("modifiers") or []],
+                    })
+        if missing_groups:
+            missing_required_map[item_id] = missing_groups
+            failed_items.append({"itemId": item_id, "reason": f"missing required modifier groups: {[g['groupName'] for g in missing_groups]}"})
+            continue
+
         item_price: int = item_row.get("price") or 0
         try:
             for _ in range(quantity):
@@ -1946,6 +2008,10 @@ async def addItemsToOrder(session_id: str, items: list[dict] | None = None, cred
         "addedItems": added_items,
         "failedItems": failed_items,
         "updatedOrderTotal": updated_total,
+        "missingRequiredModifiers": [
+            {"itemId": iid, "itemName": by_id[iid].get("name", ""), "groups": groups}
+            for iid, groups in missing_required_map.items()
+        ],
     }
     print(
         f"[addItemsToOrder] done added={len(added_items)} failed={len(failed_items)} "
@@ -3041,7 +3107,7 @@ async def calcOrderPrice(session_id: str, creds: dict | None = None) -> dict:
     """Return the current Clover-backed price breakdown for the session order.
 
     Use this before confirming an order or when the execution agent needs an
-    authoritative subtotal / tax / total for the customer's current cart.
+    authoritative subtotal / tax / total for the customer's current order.
 
     Returns a dict:
 
@@ -3115,7 +3181,32 @@ async def calcOrderPrice(session_id: str, creds: dict | None = None) -> dict:
 
 
 async def confirmOrder(session_id: str, creds: dict | None = None) -> dict:
-    """Submit the current Clover order and mark the chat session as confirmed."""
+    """Submit the current Clover order and mark the chat session as confirmed.
+
+    When to call:
+        Call once when the customer confirms they want to place the order AND
+        snapshot.current_order_summary is non-empty. Do NOT call if the order
+        is empty — reply immediately that there is nothing to confirm.
+
+    Args:
+        session_id: The current chat session identifier.
+        creds: Clover credentials dict with keys token, merchant_id, base_url.
+
+    Returns a dict with:
+        success (bool): True if the order was submitted successfully.
+        orderId (str): The Clover order ID.
+        confirmedItems (list): Each item with lineItemId, name, quantity, price, lineTotal.
+        estimatedPickuptime (int | None): Always None — no pickup time is available from
+            this system. Do NOT invent or guess a number. Tell the customer their order
+            is placed and that pickup time will be confirmed by the restaurant.
+        error (str | None): Error message if success is False, else None.
+
+    Decision guide:
+        - success True  → confirm the order to the customer; tell them pickup time will
+                          be confirmed by the restaurant. Do not quote any minutes.
+        - success False → tell the customer the order could not be placed and ask them
+                          to try again or speak to staff.
+    """
     print(f"[confirmOrder] start session_id={session_id!r}")
 
     order_id = await cache_get(_session_clover_order_redis_key(session_id))
@@ -3179,10 +3270,7 @@ async def confirmOrder(session_id: str, creds: dict | None = None) -> dict:
             "success": True,
             "orderId": order_id,
             "confirmedItems": confirmed_items,
-            # Minutes until the order is ready for pickup. Populated so the
-            # agent can phrase the confirmation as "pickup in X minutes"
-            # instead of a hallucinated clock time.
-            "estimatedPickuptime": _DEFAULT_PICKUP_MINUTES,
+            "estimatedPickuptime": None,
             "error": None,
         }
         print(f"[confirmOrder] done item_count={len(confirmed_items)} total={breakdown['total']}")
@@ -3270,11 +3358,11 @@ async def cancelOrder(session_id: str, creds: dict | None = None) -> dict:
 
 
 async def getOrderLineItems(session_id: str, creds: dict | None = None, *, force_refresh: bool = False) -> dict:
-    """Return all line items currently in the customer's cart without modifying the order.
+    """Return all line items currently in the customer's order without modifying it.
 
     Use this tool when you need to inspect what is in the order before acting on it —
     for example, before replacing an item, confirming an order, or answering a customer
-    question about their cart contents.
+    question about their order contents.
 
     Parameters
     ----------
@@ -3297,7 +3385,7 @@ async def getOrderLineItems(session_id: str, creds: dict | None = None, *, force
                                                          Pass these as existingModifierIds to validateModifications
                                                          during MODIFY_ITEM so required groups already satisfied
                                                          are not re-prompted.
-                             Empty list when the cart has no items.
+                             Empty list when the order has no items.
         orderTotal (int)   — Current order total in cents from Clover.
         error (str | None) — Human-readable error message, or None on success.
 
