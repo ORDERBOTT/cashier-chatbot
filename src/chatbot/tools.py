@@ -1199,8 +1199,8 @@ async def validateModifications(
 
     Decision guide for the agent:
         - ``allValid`` True → safe to apply modifiers; pass ``asNote`` joined as the line-item note.
-        - Non-empty ``invalid`` or ``requireChoice`` → ask the customer to clarify.
-        - Empty ``valid`` with all requested values in ``invalid`` → fail closed; do not mutate the order.
+        - Non-empty ``requireChoice`` → ask the customer to choose from the required modifier group.
+        - Non-empty ``invalid`` → entries are moved into ``asNote``; proceed without clarification.
     """
     requested = [
         str(value).strip()
@@ -1294,6 +1294,7 @@ async def validateModifications(
                 }
             )
 
+    as_note.extend(truly_invalid)
     require_choice = _required_modifier_groups(item_row, selected_keys)
     result = {
         "valid": valid,
@@ -1301,7 +1302,7 @@ async def validateModifications(
         "invalid": truly_invalid,
         "asNote": as_note,
         "requireChoice": require_choice,
-        "allValid": not truly_invalid and not require_choice,
+        "allValid": not require_choice,
     }
     print(
         f"[validateModifications] done "

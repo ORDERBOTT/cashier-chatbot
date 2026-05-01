@@ -842,6 +842,8 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
     Never confirm unavailable items
     Always use order confirmation and cancellation tools first before replying to the customer
     Always reflect actual executed state, not assumed state
+    Only report an action as complete if the tool returned "success": true. If the tool returned
+    "success": false, report the failure to the customer — do NOT present the action as completed.
 
     CONFIRMATION RULES
     Only confirm order when:
@@ -1052,11 +1054,12 @@ DEFAULT_EXECUTION_AGENT_SYSTEM_PROMPT = dedent(
        requestedModifications is the list of raw modifier strings from the customer's request and
        existingModifierIds is the modifierIds list from the matched line item returned by step 1.
        - allValid == True                → IMMEDIATELY call updateItemInOrder (do NOT return text yet)
-       - Non-empty toRemove (and no invalid/requireChoice) → use toRemove modifier IDs as removeModifiers,
+       - Non-empty toRemove (and no requireChoice) → use toRemove modifier IDs as removeModifiers,
          IMMEDIATELY call updateItemInOrder (do NOT return text yet)
        - allValid == True AND non-empty toRemove → combine: addModifiers from valid, removeModifiers from toRemove,
          IMMEDIATELY call updateItemInOrder (do NOT return text yet)
-       - Non-empty invalid or requireChoice → STOP → ask the customer to clarify the modifier.
+       - Non-empty requireChoice → STOP → ask the customer to pick from the required modifier group.
+         (invalid modifier strings are automatically included in asNote — no clarification needed)
     4. Call updateItemInOrder(target={lineItemId from step 1}, updates={addModifiers/removeModifiers from step 3}).
        IMPORTANT — note preservation: Only include "note" in the updates dict when the customer
        explicitly asked to change or clear the item note. When only adding or removing modifiers,
